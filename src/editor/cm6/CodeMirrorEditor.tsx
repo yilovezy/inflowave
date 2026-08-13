@@ -351,8 +351,14 @@ export const CodeMirrorEditor = forwardRef<CodeMirrorEditorRef, CodeMirrorEditor
           'border-0 overflow-hidden',
           className
         )}
-        style={containerStyle}
+        style={{ 
+          ...containerStyle,
+          userSelect: 'text',
+          WebkitUserSelect: 'text',
+          outline: 'none'
+        } as React.CSSProperties}
         onClick={handleContainerClick}
+        tabIndex={0}
       />
     );
   }

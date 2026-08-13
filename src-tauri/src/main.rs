@@ -9,7 +9,7 @@ mod utils;
 mod config;
 mod updater;
 
-use tauri::{Manager, Emitter, menu::{MenuBuilder, SubmenuBuilder, CheckMenuItemBuilder}, LogicalSize, LogicalPosition};
+use tauri::{Manager, Emitter, menu::{MenuBuilder, SubmenuBuilder, CheckMenuItemBuilder, PredefinedMenuItem}, LogicalSize, LogicalPosition};
 use log::{info, warn, error};
 
 // Tauri commands
@@ -451,13 +451,15 @@ pub fn create_native_menu(app: &tauri::AppHandle, lang: &str, settings: &command
         .build()?;
 
     // 编辑菜单 - 使用平台特定的快捷键
+    // 注意：在 macOS 下必须使用 PredefinedMenuItem（原生系统菜单角色），否则 webview 中的常规键盘输入（字母数字等）会失效
     let edit_menu = SubmenuBuilder::new(app, texts.edit)
-        .text("undo", &format!("{}\t{}+Z", texts.undo, cmd_key))
-        .text("redo", &format!("{}\t{}+Y", texts.redo, cmd_key))
+        .item(&PredefinedMenuItem::undo(app, Some(texts.undo))?)
+        .item(&PredefinedMenuItem::redo(app, Some(texts.redo))?)
         .separator()
-        .text("cut", &format!("{}\t{}+X", texts.cut, cmd_key))
-        .text("copy", &format!("{}\t{}+C", texts.copy, cmd_key))
-        .text("paste", &format!("{}\t{}+V", texts.paste, cmd_key))
+        .item(&PredefinedMenuItem::cut(app, Some(texts.cut))?)
+        .item(&PredefinedMenuItem::copy(app, Some(texts.copy))?)
+        .item(&PredefinedMenuItem::paste(app, Some(texts.paste))?)
+        .item(&PredefinedMenuItem::select_all(app, None)?)
         .separator()
         .text("find", &format!("{}\t{}+F", texts.find, cmd_key))
         .text("replace", &format!("{}\t{}+H", texts.replace, cmd_key))
@@ -647,6 +649,25 @@ pub fn create_native_menu(app: &tauri::AppHandle, lang: &str, settings: &command
         .text("about", texts.about)
         .build()?;
 
+    #[cfg(target_os = "macos")]
+    let app_menu = SubmenuBuilder::new(app, "InfloWave")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    return MenuBuilder::new(app)
+        .items(&[&app_menu, &file_menu, &edit_menu, &view_menu, &database_menu, &query_menu, &tools_menu, &help_menu])
+        .build();
+
+    #[cfg(not(target_os = "macos"))]
     MenuBuilder::new(app)
         .items(&[&file_menu, &edit_menu, &view_menu, &database_menu, &query_menu, &tools_menu, &help_menu])
         .build()
@@ -1111,7 +1132,7 @@ async fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // .plugin(tauri_plugin_global_shortcut::Builder::new().build()) // Temporarily disable to fix macOS 12 keyboard issue
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

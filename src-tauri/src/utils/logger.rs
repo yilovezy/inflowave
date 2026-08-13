@@ -188,13 +188,13 @@ fn setup_logging(log_dir: &PathBuf) -> Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
             if cfg!(debug_assertions) {
-                println!("🔍 [Logger] 开发模式：使用 DEBUG 级别（AWS SDK 使用 INFO 级别）");
-                // 开发环境：应用级别使用 debug，AWS SDK 相关的库使用 info
-                EnvFilter::new("debug,aws_smithy_runtime=info,aws_runtime=info,aws_sdk_s3=info")
+                println!("🔍 [Logger] 开发模式：使用 DEBUG 级别（AWS SDK 和网络底层库使用 INFO 级别）");
+                // 开发环境：应用级别使用 debug，网络和 AWS SDK 相关的库使用 info
+                EnvFilter::new("debug,aws_smithy_runtime=info,aws_runtime=info,aws_sdk_s3=info,hyper=info,reqwest=info,h2=info,tower=info,rustls=info")
             } else {
                 // 生产环境：只记录 ERROR 和 WARN，大幅减少日志输出
                 println!("🔍 [Logger] 生产模式：使用 WARN 级别（仅记录警告和错误）");
-                EnvFilter::new("warn,aws_smithy_runtime=error,aws_runtime=error,aws_sdk_s3=error")
+                EnvFilter::new("warn,aws_smithy_runtime=error,aws_runtime=error,aws_sdk_s3=error,hyper=warn,reqwest=warn")
             }
         });
 

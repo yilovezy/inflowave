@@ -124,7 +124,9 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
         return [
           { value: 'ap-beijing', label: t('object_storage.region_beijing') },
           { value: 'ap-shanghai', label: t('object_storage.region_shanghai') },
-          { value: 'ap-guangzhou', label: t('object_storage.region_guangzhou') }
+          { value: 'ap-guangzhou', label: t('object_storage.region_guangzhou') },
+          { value: 'cnsso-sh', label: 'TCE 私有云 (cnsso-sh)' },
+          { value: 'custom', label: '自定义 (Custom)' }
         ];
       case 'qiniu-kodo':
         return [
@@ -191,6 +193,20 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
           validation: (value: string, formData: any) => {
             if (['s3', 'aliyun-oss', 'tencent-cos', 'qiniu-kodo', 'cloudflare-r2', 'digitalocean-spaces', 'backblaze-b2', 'wasabi'].includes(formData.objectStorageProvider) && !value?.trim()) {
               return t('object_storage.region_required');
+            }
+          }
+        },
+        // 自定义区域输入框 (当选择了 "custom" 时显示)
+        {
+          name: 's3CustomRegion',
+          label: t('object_storage.custom_region') || '自定义区域 (Custom Region)',
+          type: 'text',
+          required: true,
+          visible: (formData) => formData.s3Region === 'custom',
+          placeholder: '例如: us-east-1, cnsso-sh',
+          validation: (value: string, formData: any) => {
+            if (formData.s3Region === 'custom' && !value?.trim()) {
+              return '请输入自定义区域 (Please enter custom region)';
             }
           }
         },
@@ -450,13 +466,13 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
           placeholder: t('object_storage.url_suffix_placeholder'),
           description: t('object_storage.url_suffix_description')
         },
-        // S3/MinIO/R2/Spaces/B2/Wasabi 特有选项
+        // S3/MinIO/R2/Spaces/B2/Wasabi 特有选项 (私有云OSS/COS也需要)
         {
           name: 's3UseSSL',
           label: t('object_storage.use_ssl'),
           type: 'switch',
           defaultValue: true,
-          visible: (formData) => ['s3', 'minio', 'cloudflare-r2', 'digitalocean-spaces', 'backblaze-b2', 'wasabi'].includes(formData.objectStorageProvider),
+          visible: (formData) => ['s3', 'minio', 'aliyun-oss', 'tencent-cos', 'cloudflare-r2', 'digitalocean-spaces', 'backblaze-b2', 'wasabi'].includes(formData.objectStorageProvider),
           description: t('object_storage.use_ssl_description')
         },
         {
@@ -464,7 +480,7 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
           label: t('object_storage.path_style'),
           type: 'switch',
           defaultValue: false,
-          visible: (formData) => ['s3', 'minio', 'cloudflare-r2', 'digitalocean-spaces', 'backblaze-b2', 'wasabi'].includes(formData.objectStorageProvider),
+          visible: (formData) => ['s3', 'minio', 'aliyun-oss', 'tencent-cos', 'cloudflare-r2', 'digitalocean-spaces', 'backblaze-b2', 'wasabi'].includes(formData.objectStorageProvider),
           description: t('object_storage.path_style_description')
         },
         // Imgur 代理
@@ -579,7 +595,7 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
         s3: {
           provider: formData.objectStorageProvider,
           endpoint: formData.s3Endpoint || '',
-          region: formData.s3Region || '',
+          region: (formData.s3Region === 'custom' ? formData.s3CustomRegion : formData.s3Region) || '',
           accessKey: formData.s3AccessKey || '',
           secretKey: formData.s3SecretKey || '',
           useSSL: formData.s3UseSSL || true,
@@ -635,7 +651,9 @@ export class ObjectStorageConnector extends BaseConnector<ObjectStorageConfig> {
       queryTimeout: config.queryTimeout,
       objectStorageProvider: s3Config?.provider || 's3',
       s3Endpoint: s3Config?.endpoint,
-      s3Region: s3Config?.region,
+      // 如果存储的region不在默认列表内，将其识别为custom，并将实际值放入s3CustomRegion
+      s3Region: s3Config?.region && !this.getRegionOptions(s3Config?.provider || 's3').some(opt => opt.value === s3Config?.region) ? 'custom' : s3Config?.region,
+      s3CustomRegion: s3Config?.region && !this.getRegionOptions(s3Config?.provider || 's3').some(opt => opt.value === s3Config?.region) ? s3Config?.region : undefined,
       s3AccessKey: s3Config?.accessKey,
       s3SecretKey: s3Config?.secretKey,
       s3UseSSL: s3Config?.useSSL,

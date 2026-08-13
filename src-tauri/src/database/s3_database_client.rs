@@ -208,7 +208,7 @@ impl S3DatabaseClient {
         let mut children = Vec::new();
 
         match node_type {
-            "Connection" => {
+            "Connection" | "connection" => {
                 // 连接节点的子节点是存储桶列表
                 let buckets = self.manager.list_buckets(&self.connection_id).await?;
 
@@ -231,7 +231,7 @@ impl S3DatabaseClient {
                     children.push(node);
                 }
             },
-            "StorageBucket" => {
+            "StorageBucket" | "storage_bucket" => {
                 // 获取存储桶名称
                 let bucket_name = if let Some(metadata) = metadata {
                     metadata.get("bucket_name")
@@ -300,7 +300,7 @@ impl S3DatabaseClient {
                     }
                 }
             },
-            "Folder" => {
+            "Folder" | "folder" => {
                 // 获取存储桶名称和文件夹前缀
                 let (bucket_name, prefix) = if let Some(metadata) = metadata {
                     (

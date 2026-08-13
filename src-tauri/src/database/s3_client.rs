@@ -261,8 +261,9 @@ impl S3ClientManager {
 
         // 注意：某些S3兼容服务（如Cloudflare R2）不支持max_buckets参数
         // 因此我们先尝试使用max_buckets=1，如果失败则回退到不带参数的list_buckets
-        match client.list_buckets().max_buckets(1).send().await {
-            Ok(_) => {
+        let resp_future = client.list_buckets().max_buckets(1).send();
+        match tokio::time::timeout(std::time::Duration::from_secs(15), resp_future).await {
+            Ok(Ok(_)) => {
                 log::info!("S3 connection test successful (with max_buckets)");
                 Ok(true)
             }
@@ -281,8 +282,9 @@ impl S3ClientManager {
 
                 // 如果不是认证错误，可能是不支持max_buckets参数
                 // 尝试不带max_buckets参数的list_buckets
-                match client.list_buckets().send().await {
-                    Ok(_) => {
+                let resp_future2 = client.list_buckets().send();
+                match tokio::time::timeout(std::time::Duration::from_secs(15), resp_future2).await {
+                    Ok(Ok(_)) => {
                         log::info!("S3 connection test successful (without max_buckets)");
                         Ok(true)
                     }
@@ -309,7 +311,11 @@ impl S3ClientManager {
     pub async fn list_buckets(&self, id: &str) -> Result<Vec<S3Bucket>> {
         let client = self.get_client(id).await?;
 
-        let resp = client.list_buckets().send().await?;
+        let resp_future = client.list_buckets().send();
+        let resp = match tokio::time::timeout(std::time::Duration::from_secs(15), resp_future).await {
+            Ok(result) => result?,
+            Err(_) => return Err(anyhow::anyhow!("S3 list_buckets 请求超时")),
+        };
 
         let buckets = resp
             .buckets()
@@ -374,7 +380,11 @@ impl S3ClientManager {
                 request = request.continuation_token(token);
             }
 
-            let resp = request.send().await?;
+            let resp_future = request.send();
+        let resp = match tokio::time::timeout(std::time::Duration::from_secs(15), resp_future).await {
+            Ok(result) => result?,
+            Err(_) => return Err(anyhow::anyhow!("S3 list_objects 请求超时，请检查网络或配置（若使用私有云且端点带有 bucket，请尝试开启 Path Style）")),
+        };
 
             // 删除所有对象
             let contents = resp.contents();
@@ -427,7 +437,14 @@ impl S3ClientManager {
             request = request.continuation_token(token);
         }
 
-        let resp = request.send().await?;
+        let resp_future = request.send();
+        let resp = match tokio::time::timeout(std::time::Duration::from_secs(15), resp_future).await {
+            Ok(result) => result?,
+            Err(_) => {
+                log::error!("S3 list_objects timed out for bucket: {}", bucket);
+                return Err(anyhow::anyhow!("S3 list_objects 请求超时，请检查网络或端点配置（若使用私有云，请尝试开启 Path Style）"));
+            }
+        };
 
         let objects = resp
             .contents()

@@ -73,31 +73,25 @@ export default defineConfig({
         // 分包策略
         rollupOptions: {
             output: {
-                manualChunks: {
-                    vendor: ['react', 'react-dom', 'react-router-dom'],
-                    charts: ['echarts', 'echarts-for-react'],
-                    editor: [
-                        '@codemirror/state',
-                        '@codemirror/view',
-                        '@codemirror/commands',
-                        '@codemirror/language',
-                        '@codemirror/autocomplete',
-                        '@codemirror/lint',
-                        '@codemirror/search',
-                        '@codemirror/lang-sql',
-                        '@codemirror/lang-javascript',
-                        '@codemirror/theme-one-dark',
-                        '@lezer/highlight',
-                        '@lezer/common',
-                        '@lezer/lr',
-                        'codemirror',
-                        'style-mod',
-                        'crelt',
-                        'w3c-keyname',
-                    ],
-                    utils: ['lodash-es', 'dayjs', 'classnames'],
-                    tauri: ['@tauri-apps/api', '@tauri-apps/plugin-shell'],
-                    i18n: ['react-i18next', 'i18next', 'i18next-browser-languagedetector', 'date-fns'],
+                manualChunks(id: string) {
+                    // 自动将 node_modules 中的第三方库拆包
+                    if (id.includes('node_modules')) {
+                        if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
+                            return 'vendor';
+                        }
+                        if (id.includes('echarts')) {
+                            return 'charts';
+                        }
+                        if (id.includes('codemirror') || id.includes('@codemirror') || id.includes('@lezer')) {
+                            return 'editor';
+                        }
+                        if (id.includes('@tauri-apps')) {
+                            return 'tauri';
+                        }
+                        if (id.includes('i18next') || id.includes('react-i18next')) {
+                            return 'i18n';
+                        }
+                    }
                 },
                 // 优化输出文件名
                 chunkFileNames: 'assets/js/[name]-[hash].js',

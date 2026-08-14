@@ -138,6 +138,7 @@ export function clearConnectionLoadingState(connectionId: string): void {
 interface S3BrowserProps {
   connectionId: string;
   connectionName?: string;
+  defaultBucket?: string;
 }
 
 interface BreadcrumbItem {
@@ -155,9 +156,19 @@ interface FileOperation {
 const S3Browser: React.FC<S3BrowserProps> = ({
   connectionId,
   connectionName = 'S3',
+  defaultBucket = '',
 }) => {
   const [buckets, setBuckets] = useState<S3Bucket[]>([]);
-  const [currentBucket, setCurrentBucket] = useState<string>(''); // 当前所在的 bucket
+  const [currentBucket, setCurrentBucket] = useState<string>(defaultBucket); // 当前所在的 bucket
+  const prevDefaultBucketRef = useRef(defaultBucket); // 记录上一次的 defaultBucket
+
+  useEffect(() => {
+    if (defaultBucket && defaultBucket !== prevDefaultBucketRef.current) {
+      setCurrentBucket(defaultBucket);
+      setCurrentPath(''); // 切换 bucket 时，重置路径
+      prevDefaultBucketRef.current = defaultBucket;
+    }
+  }, [defaultBucket]);
   const [currentPath, setCurrentPath] = useState<string>(''); // 当前路径（bucket内的路径）
   const [objects, setObjects] = useState<S3Object[]>([]);
   const [selectedObjects, setSelectedObjects] = useState<Set<string>>(
@@ -377,6 +388,7 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   // 加载根级别内容（buckets 或 bucket 内的对象）
   // 注意：不包含 sortBy 依赖项，因为排序在前端完成，不需要重新加载数据
   useEffect(() => {
+    console.error(`🔍🔍🔍 [S3Browser-DIAG] useEffect 触发: bucket="${currentBucket}", path="${currentPath}", isLoadingBuckets=${isLoadingBucketsRef.current}`);
     logger.info(
       `📦 [S3Browser] useEffect 触发: bucket=${currentBucket}, path=${currentPath}, isLoading=${isLoadingBucketsRef.current}`
     );
@@ -388,11 +400,13 @@ const S3Browser: React.FC<S3BrowserProps> = ({
         logger.warn('📦 [S3Browser] ⚠️ useEffect: 跳过重复的 loadBuckets 调用（已在加载中）');
         return;
       }
+      console.error(`🔍🔍🔍 [S3Browser-DIAG] 调用 loadBuckets()`);
       loadBuckets();
     } else {
       // 在某个 bucket 内，显示对象
       // 取消 bucket stats 请求，因为我们要进入某个 bucket 了
       cancelAllBucketStatsRequests();
+      console.error(`🔍🔍🔍 [S3Browser-DIAG] 调用 loadObjects(), currentBucket="${currentBucket}"`);
       loadObjects();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -653,20 +667,23 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   };
 
   const loadObjects = async (append: boolean = false) => {
+    console.error(`🔍🔍🔍 [S3Browser-DIAG] loadObjects 被调用: currentBucket="${currentBucket}", currentPath="${currentPath}", append=${append}`);
     if (!currentBucket) {
+      console.error(`🔍🔍🔍 [S3Browser-DIAG] loadObjects 中止: currentBucket 为空`);
       logger.warn(`📦 [S3Browser] loadObjects 被调用但 currentBucket 为空`);
       return;
     }
 
     try {
       setIsLoading(true);
+      console.error(`🔍🔍🔍 [S3Browser-DIAG] loadObjects 调用 S3Service.listObjects: bucket="${currentBucket}", prefix="${currentPath || 'undefined'}"`);
       logger.info(
         `📦 [S3Browser] 开始加载对象: bucket=${currentBucket}, path=${currentPath}, append=${append}`
       );
       const result = await S3Service.listObjects(
         connectionId,
         currentBucket,
-        currentPath,
+        currentPath ? currentPath : undefined,
         '/',
         viewConfig.pageSize,
         append ? continuationToken : undefined
@@ -974,9 +991,11 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   };
 
   const handleObjectClick = async (object: S3Object) => {
+    console.error(`🔍🔍🔍 [S3Browser-DIAG] handleObjectClick: name="${object.name}", isDir=${object.isDirectory}, currentBucket="${currentBucket}"`);
     if (object.isDirectory) {
       // 如果当前在根级别（没有选择 bucket），则进入该 bucket
       if (!currentBucket) {
+        console.error(`🔍🔍🔍 [S3Browser-DIAG] 进入 bucket: "${object.name}", 即将 setCurrentBucket`);
         logger.info(`📦 [S3Browser] 进入 bucket: ${object.name}`);
         // 立即显示加载状态，清空旧内容
         setIsLoading(true);
@@ -2572,6 +2591,12 @@ const S3Browser: React.FC<S3BrowserProps> = ({
                       </td>
                     </tr>
                   ))
+                ) : sortedObjects.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className='p-8 text-center text-muted-foreground'>
+                      {searchTerm ? t('s3:empty.search', { defaultValue: '没有找到匹配的文件' }) : t('s3:empty.folder', { defaultValue: '文件夹为空' })}
+                    </td>
+                  </tr>
                 ) : sortedObjects.map((object, index) => (
                   <tr
                     key={object.key}
@@ -2688,7 +2713,20 @@ const S3Browser: React.FC<S3BrowserProps> = ({
             </div>
           ) : (
             <div className='grid grid-cols-6 gap-2 p-2'>
-              {sortedObjects.map((object, index) => (
+              {isLoading && sortedObjects.length === 0 ? (
+                // 骨架屏
+                Array.from({ length: 12 }).map((_, index) => (
+                  <div key={`skeleton-${index}`} className='flex flex-col items-center p-4 rounded-lg bg-muted/20 animate-pulse'>
+                    <div className='w-12 h-12 mb-2 bg-muted rounded' />
+                    <div className='w-full h-4 bg-muted rounded' />
+                  </div>
+                ))
+              ) : sortedObjects.length === 0 ? (
+                <div className='col-span-full p-12 flex flex-col items-center justify-center text-muted-foreground'>
+                  <FolderOpen className='w-12 h-12 mb-4 opacity-20' />
+                  <p>{searchTerm ? t('s3:empty.search', { defaultValue: '没有找到匹配的文件' }) : t('s3:empty.folder', { defaultValue: '文件夹为空' })}</p>
+                </div>
+              ) : sortedObjects.map((object, index) => (
                 <ContextMenu key={object.key}>
                   <ContextMenuTrigger asChild>
                     <div

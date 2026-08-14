@@ -1,4 +1,4 @@
-﻿import React, {
+import React, {
   useState,
   useEffect,
   useImperativeHandle,
@@ -465,14 +465,14 @@ const TabEditorRefactored = forwardRef<TabEditorRef, TabEditorProps>(
           </div>
 
           {/* 编辑器内容 */}
-          <div className='flex-1 min-h-0'>
+          <div className='flex-1 min-h-0 relative'>
             {tabs.map(tab => {
               const isActive = tab.id === activeKey;
               logger.debug(`🎨 [TabEditor] 渲染 tab: ${tab.id}, type: ${tab.type}, isActive: ${isActive}`);
               return (
                 <div
                   key={tab.id}
-                  className='h-full'
+                  className='absolute inset-0'
                   style={{ display: isActive ? 'block' : 'none' }}
                 >
                   {tab.type === 'data-browser' ? (
@@ -485,6 +485,7 @@ const TabEditorRefactored = forwardRef<TabEditorRef, TabEditorProps>(
                     <S3Browser
                       connectionId={tab.connectionId!}
                       connectionName={tab.connectionName || tab.title}
+                      defaultBucket={tab.defaultBucket}
                     />
                   ) : (
                     tab.type === 'query' && (

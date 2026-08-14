@@ -123,17 +123,16 @@ pub struct S3GetBucketAclRequest {
 pub async fn s3_connect(
     connection_id: String,
     config: S3ConnectionConfig,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<bool, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .create_client(&connection_id, &config)
         .await
         .map_err(|e| e.to_string())?;
 
     // 测试连接
-    manager
+    s3_manager
         .test_connection(&connection_id)
         .await
         .map_err(|e| e.to_string())
@@ -143,11 +142,10 @@ pub async fn s3_connect(
 #[tauri::command]
 pub async fn s3_disconnect(
     connection_id: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .remove_client(&connection_id)
         .await
         .map_err(|e| e.to_string())
@@ -157,11 +155,10 @@ pub async fn s3_disconnect(
 #[tauri::command]
 pub async fn s3_test_connection(
     connection_id: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<bool, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .test_connection(&connection_id)
         .await
         .map_err(|e| e.to_string())
@@ -171,14 +168,19 @@ pub async fn s3_test_connection(
 #[tauri::command]
 pub async fn s3_list_buckets(
     connection_id: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<Vec<S3Bucket>, String> {
-    let manager = s3_manager.lock().await;
+    tracing::info!("\u{1f50d}\u{1f50d}\u{1f50d} [DIAG] s3_list_buckets 被调用: connection_id={}", connection_id);
 
-    manager
+    let result = s3_manager
         .list_buckets(&connection_id)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    match &result {
+        Ok(buckets) => tracing::info!("\u{1f50d}\u{1f50d}\u{1f50d} [DIAG] s3_list_buckets 成功: {} 个 buckets", buckets.len()),
+        Err(e) => tracing::error!("\u{1f50d}\u{1f50d}\u{1f50d} [DIAG] s3_list_buckets 失败: {}", e),
+    }
+    result
 }
 
 // 创建bucket
@@ -187,11 +189,10 @@ pub async fn s3_create_bucket(
     connection_id: String,
     bucket_name: String,
     region: Option<String>,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .create_bucket(&connection_id, &bucket_name, region)
         .await
         .map_err(|e| e.to_string())
@@ -202,11 +203,10 @@ pub async fn s3_create_bucket(
 pub async fn s3_delete_bucket(
     connection_id: String,
     bucket_name: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .delete_bucket(&connection_id, &bucket_name)
         .await
         .map_err(|e| e.to_string())
@@ -216,11 +216,11 @@ pub async fn s3_delete_bucket(
 #[tauri::command]
 pub async fn s3_list_objects(
     request: S3ListRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<S3ListObjectsResult, String> {
-    let manager = s3_manager.lock().await;
+    tracing::info!("🔍🔍🔍 [DIAG] s3_list_objects 被调用: bucket={}, prefix={:?}, delimiter={:?}", request.bucket, request.prefix, request.delimiter);
 
-    manager
+    let result = s3_manager
         .list_objects(
             &request.connection_id,
             &request.bucket,
@@ -230,18 +230,22 @@ pub async fn s3_list_objects(
             request.continuation_token,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string());
+    match &result {
+        Ok(r) => tracing::info!("🔍🔍🔍 [DIAG] s3_list_objects 成功: {} 个 objects, {} 个 prefixes", r.objects.len(), r.common_prefixes.len()),
+        Err(e) => tracing::error!("🔍🔍🔍 [DIAG] s3_list_objects 失败: {}", e),
+    }
+    result
 }
 
 // 上传对象
 #[tauri::command]
 pub async fn s3_upload_object(
     request: S3UploadRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .upload_object(
             &request.connection_id,
             &request.bucket,
@@ -257,11 +261,10 @@ pub async fn s3_upload_object(
 #[tauri::command]
 pub async fn s3_download_object(
     request: S3DownloadRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<Vec<u8>, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .download_object(&request.connection_id, &request.bucket, &request.key)
         .await
         .map_err(|e| e.to_string())
@@ -273,11 +276,10 @@ pub async fn s3_delete_object(
     connection_id: String,
     bucket: String,
     key: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .delete_object(&connection_id, &bucket, &key)
         .await
         .map_err(|e| e.to_string())
@@ -287,11 +289,10 @@ pub async fn s3_delete_object(
 #[tauri::command]
 pub async fn s3_delete_objects(
     request: S3DeleteRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<Vec<String>, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .delete_objects(&request.connection_id, &request.bucket, request.keys)
         .await
         .map_err(|e| e.to_string())
@@ -301,11 +302,10 @@ pub async fn s3_delete_objects(
 #[tauri::command]
 pub async fn s3_copy_object(
     request: S3CopyRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .copy_object(
             &request.connection_id,
             &request.source_bucket,
@@ -321,11 +321,10 @@ pub async fn s3_copy_object(
 #[tauri::command]
 pub async fn s3_move_object(
     request: S3MoveRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .move_object(
             &request.connection_id,
             &request.source_bucket,
@@ -343,11 +342,10 @@ pub async fn s3_create_folder(
     connection_id: String,
     bucket: String,
     folder_path: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .create_folder(&connection_id, &bucket, &folder_path)
         .await
         .map_err(|e| e.to_string())
@@ -359,11 +357,10 @@ pub async fn s3_get_object_metadata(
     connection_id: String,
     bucket: String,
     key: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .get_object_metadata(&connection_id, &bucket, &key)
         .await
         .map_err(|e| e.to_string())
@@ -373,11 +370,10 @@ pub async fn s3_get_object_metadata(
 #[tauri::command]
 pub async fn s3_generate_presigned_url(
     request: S3PresignedUrlRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<S3PresignedUrlResult, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .generate_presigned_url(
             &request.connection_id,
             &request.bucket,
@@ -393,11 +389,10 @@ pub async fn s3_generate_presigned_url(
 #[tauri::command]
 pub async fn s3_search_objects(
     request: S3SearchRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<Vec<S3Object>, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .search_objects(
             &request.connection_id,
             &request.bucket,
@@ -416,14 +411,13 @@ pub async fn s3_upload_file(
     key: String,
     file_path: String,
     content_type: Option<String>,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
     // 读取文件
     let data = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    let manager = s3_manager.lock().await;
 
     // 如果没有提供content_type，尝试从文件扩展名猜测
     let final_content_type = content_type.or_else(|| {
@@ -432,7 +426,7 @@ pub async fn s3_upload_file(
             .map(|m| m.to_string())
     });
 
-    manager
+    s3_manager
         .upload_object(&connection_id, &bucket, &key, data, final_content_type)
         .await
         .map_err(|e| e.to_string())
@@ -445,12 +439,11 @@ pub async fn s3_download_file(
     bucket: String,
     key: String,
     save_path: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
     // 下载数据
-    let data = manager
+    let data = s3_manager
         .download_object(&connection_id, &bucket, &key)
         .await
         .map_err(|e| e.to_string())?;
@@ -468,16 +461,15 @@ pub async fn s3_download_file(
 pub async fn s3_get_bucket_stats(
     connection_id: String,
     bucket: String,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<serde_json::Value, String> {
-    let manager = s3_manager.lock().await;
 
     let mut total_size: i64 = 0;
     let mut total_count: i64 = 0;
     let mut continuation_token: Option<String> = None;
 
     loop {
-        let result = manager
+        let result = s3_manager
             .list_objects(
                 &connection_id,
                 &bucket,
@@ -514,11 +506,10 @@ pub async fn s3_get_bucket_stats(
 #[tauri::command]
 pub async fn s3_get_object_tagging(
     request: S3GetTaggingRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .get_object_tagging(&request.connection_id, &request.bucket, &request.key)
         .await
         .map_err(|e| e.to_string())
@@ -528,11 +519,10 @@ pub async fn s3_get_object_tagging(
 #[tauri::command]
 pub async fn s3_put_object_tagging(
     request: S3TaggingRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .put_object_tagging(&request.connection_id, &request.bucket, &request.key, request.tags)
         .await
         .map_err(|e| e.to_string())
@@ -542,11 +532,10 @@ pub async fn s3_put_object_tagging(
 #[tauri::command]
 pub async fn s3_get_object_acl(
     request: S3GetObjectAclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<String, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .get_object_acl(&request.connection_id, &request.bucket, &request.key)
         .await
         .map_err(|e| e.to_string())
@@ -556,11 +545,10 @@ pub async fn s3_get_object_acl(
 #[tauri::command]
 pub async fn s3_put_object_acl(
     request: S3AclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .put_object_acl(&request.connection_id, &request.bucket, &request.key, &request.acl)
         .await
         .map_err(|e| e.to_string())
@@ -570,11 +558,10 @@ pub async fn s3_put_object_acl(
 #[tauri::command]
 pub async fn s3_get_bucket_acl(
     request: S3GetBucketAclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<String, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .get_bucket_acl(&request.connection_id, &request.bucket)
         .await
         .map_err(|e| e.to_string())
@@ -584,11 +571,10 @@ pub async fn s3_get_bucket_acl(
 #[tauri::command]
 pub async fn s3_put_bucket_acl(
     request: S3BucketAclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .put_bucket_acl(&request.connection_id, &request.bucket, &request.acl)
         .await
         .map_err(|e| e.to_string())
@@ -598,11 +584,10 @@ pub async fn s3_put_bucket_acl(
 #[tauri::command]
 pub async fn s3_get_bucket_policy(
     request: S3GetBucketAclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<String, String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .get_bucket_policy(&request.connection_id, &request.bucket)
         .await
         .map_err(|e| e.to_string())
@@ -612,11 +597,10 @@ pub async fn s3_get_bucket_policy(
 #[tauri::command]
 pub async fn s3_put_bucket_policy(
     request: S3BucketAclRequest,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    let manager = s3_manager.lock().await;
 
-    manager
+    s3_manager
         .put_bucket_policy(&request.connection_id, &request.bucket, &request.acl)
         .await
         .map_err(|e| e.to_string())

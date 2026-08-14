@@ -111,9 +111,17 @@ impl S3ClientManager {
         }
 
         // 创建S3客户端配置
+        // 当有自定义端点时（私有化部署/MinIO/腾讯云COS等），自动启用 path style
+        // 因为虚拟主机风格（bucket.endpoint）通常需要 DNS 通配符解析支持，私有部署一般不支持
+        let use_path_style = if config.endpoint.is_some() && !config.path_style {
+            log::info!("检测到自定义端点且未开启 path_style，自动启用 path style 以确保兼容性");
+            true
+        } else {
+            config.path_style
+        };
         let mut s3_config_builder = Config::builder()
             .behavior_version(BehaviorVersion::latest())
-            .force_path_style(config.path_style);
+            .force_path_style(use_path_style);
 
         // 设置自定义端点（用于MinIO等）
         if let Some(endpoint) = &config.endpoint {
@@ -267,11 +275,11 @@ impl S3ClientManager {
                 log::info!("S3 connection test successful (with max_buckets)");
                 Ok(true)
             }
-            Err(e) => {
-                let error_msg = e.to_string();
-                log::debug!("S3 connection test with max_buckets failed: {}, trying without max_buckets", error_msg);
+            Ok(Err(e)) => {
+                log::warn!("S3 connection test with max_buckets failed: {}", e);
 
                 // 检查是否是认证错误
+                let error_msg = e.to_string();
                 if error_msg.contains("InvalidAccessKeyId") || error_msg.contains("SignatureDoesNotMatch") {
                     return Err(anyhow::anyhow!("认证失败: Access Key 或 Secret Key 错误"));
                 } else if error_msg.contains("AccessDenied") || error_msg.contains("403") {
@@ -288,7 +296,7 @@ impl S3ClientManager {
                         log::info!("S3 connection test successful (without max_buckets)");
                         Ok(true)
                     }
-                    Err(e2) => {
+                    Ok(Err(e2)) => {
                         log::error!("S3 connection test failed: {}", e2);
 
                         // 再次检查认证错误
@@ -303,7 +311,15 @@ impl S3ClientManager {
 
                         Err(anyhow::anyhow!("连接测试失败: {}", e2))
                     }
+                    Err(_) => {
+                        log::error!("S3 list_buckets test timed out");
+                        Err(anyhow::anyhow!("S3 连接测试请求超时，请检查网络或端点配置"))
+                    }
                 }
+            }
+            Err(_) => {
+                log::error!("S3 list_buckets test with max_buckets timed out");
+                Err(anyhow::anyhow!("S3 连接测试请求超时，请检查网络或端点配置"))
             }
         }
     }
@@ -419,7 +435,9 @@ impl S3ClientManager {
     ) -> Result<S3ListObjectsResult> {
         let client = self.get_client(id).await?;
 
-        let mut request = client.list_objects_v2().bucket(bucket);
+        // 🔧 使用 V1 API 代替 V2 API，以确保更广泛的兼容性
+        // (部分私有化部署的腾讯云/MinIO等在特定配置下可能会卡住V2请求)
+        let mut request = client.list_objects().bucket(bucket);
 
         if let Some(p) = prefix {
             request = request.prefix(p);
@@ -434,7 +452,7 @@ impl S3ClientManager {
         }
 
         if let Some(token) = continuation_token {
-            request = request.continuation_token(token);
+            request = request.marker(token);
         }
 
         let resp_future = request.send();
@@ -446,7 +464,7 @@ impl S3ClientManager {
             }
         };
 
-        let objects = resp
+        let objects: Vec<S3Object> = resp
             .contents()
             .iter()
             .map(|obj| {
@@ -482,12 +500,23 @@ impl S3ClientManager {
             .filter_map(|p| p.prefix().map(|s| s.to_string()))
             .collect();
 
+        // 尝试从下一个标记中获取，如果没有，则根据 S3 V1 API 规范，
+        // 使用最后一个对象的 key 作为下一个 marker
+        let next_marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
+            if resp.is_truncated().unwrap_or(false) {
+                objects.last().map(|obj: &S3Object| obj.key.clone())
+            } else {
+                None
+            }
+        });
+
         Ok(S3ListObjectsResult {
             objects,
             common_prefixes,
             is_truncated: resp.is_truncated().unwrap_or(false),
-            next_continuation_token: resp.next_continuation_token().map(|s| s.to_string()),
-            key_count: resp.key_count().unwrap_or(0),
+            next_continuation_token: next_marker,
+            // V1 doesn't have key_count, so we compute it
+            key_count: resp.contents().len() as i32,
         })
     }
 

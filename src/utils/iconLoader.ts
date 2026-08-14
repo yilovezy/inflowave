@@ -325,6 +325,9 @@ export const getFunctionalIcon = (nodeType: TreeNodeType | string, theme: 'light
     'retention_policy': 'retention-policy',
     'continuous_query': 'continuous-query',
     'series': 'series',
+    'storage_bucket': 'bucket',
+    'folder': 'namespace',
+    'file': 'table',
   };
 
   // 支持打开状态的节点类型
@@ -334,7 +337,8 @@ export const getFunctionalIcon = (nodeType: TreeNodeType | string, theme: 'light
     'storage-group', 'device', 'organization', 'schema',
     'namespace', 'view', 'materialized-view', 'dashboard',
     'attribute-group', 'schema-template', 'template',
-    'system-info', 'function', 'trigger'
+    'system-info', 'function', 'trigger',
+    'bucket' // Added bucket here since it's mapped from storage_bucket
   ]);
 
   const iconName = nodeTypeToIconName[nodeType] || nodeType.toString().replace(/_/g, '-');

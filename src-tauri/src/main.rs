@@ -1721,9 +1721,9 @@ async fn main() {
             app.manage(commands::workspace::WorkspaceStorage::new(commands::workspace::WorkspaceData::default()));
 
             // Initialize S3 client manager
-            let s3_manager = std::sync::Arc::new(tokio::sync::Mutex::new(
+            let s3_manager = std::sync::Arc::new(
                 database::s3_client::S3ClientManager::new()
-            ));
+            );
             app.manage(s3_manager);
 
             // Initialize logging system first

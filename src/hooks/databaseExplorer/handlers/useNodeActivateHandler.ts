@@ -167,6 +167,29 @@ export const useNodeActivateHandler = ({
                     connectionId,
                 });
             }
+        } else if (nodeType === 'storage_bucket') {
+            const bucket = node.name;
+            logger.info(`📦 [DatabaseExplorer] 双击存储桶节点，准备打开S3浏览器: ${bucket}`);
+            
+            // 确保对象存储节点被标记为已打开
+            const { openObjectStorage, isObjectStorageOpened } = useOpenedDatabasesStore.getState();
+            if (!isObjectStorageOpened(connectionId)) {
+                openObjectStorage(connectionId);
+                logger.info(`📂 [DatabaseExplorer] 连带打开对象存储节点: ${connectionId}`);
+            }
+
+            // 同样需要标记这个特定的 bucket 为已打开
+            const { openDatabase, isDatabaseOpened } = useOpenedDatabasesStore.getState();
+            if (!isDatabaseOpened(connectionId, `bucket:${bucket}`)) {
+                openDatabase(connectionId, `bucket:${bucket}`);
+                logger.info(`📂 [DatabaseExplorer] 标记存储桶为已打开: ${bucket}`);
+            }
+
+            if (onCreateS3BrowserTab) {
+                // 对于 connectionName 可以通过获取所有连接来查，或者我们直接传 'S3'
+                onCreateS3BrowserTab(connectionId, 'S3', bucket);
+                showMessage.success(`正在打开存储桶 "${bucket}"`);
+            }
         } else if (
             nodeType === 'function' ||
             nodeType === 'trigger' ||

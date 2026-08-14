@@ -196,6 +196,12 @@ impl S3DatabaseClient {
         Err(anyhow!("S3客户端不支持获取表结构"))
     }
 
+    /// 获取数据源树节点（根节点）
+    pub async fn get_tree_nodes(&self) -> Result<Vec<crate::models::TreeNode>> {
+        // 对于S3，根节点就是存储桶列表
+        self.get_tree_children("", "Connection", None).await
+    }
+
     /// 获取树节点的子节点（懒加载）
     pub async fn get_tree_children(
         &self,

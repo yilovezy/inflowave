@@ -77,7 +77,12 @@ export type TreeNodeType =
 
   // 系统节点
   | 'system_database'   // 系统数据库（如 _internal）
-  | 'system_bucket';    // 系统存储桶（如 _monitoring）
+  | 'system_bucket'     // 系统存储桶（如 _monitoring）
+
+  // 对象存储节点
+  | 'storage_bucket'    // 存储桶
+  | 'folder'            // 文件夹
+  | 'file';             // 文件
 
 export interface TreeNode {
   id: string;
@@ -171,6 +176,9 @@ export const TreeNodeDescriptions: Record<TreeNodeType, string> = {
   tag_group: '标签分组，包含索引的元数据',
   field: '字段，存储数值数据',
   tag: '标签，用于索引和过滤',
+  storage_bucket: '对象存储桶',
+  folder: '文件夹/前缀',
+  file: '对象/文件',
 };
 
 /**
@@ -240,6 +248,9 @@ export const TreeNodeStyles: Record<TreeNodeType, string> = {
   tag_group: 'text-pink-500 font-medium',
   field: 'text-orange-400',
   tag: 'text-pink-400',
+  storage_bucket: 'text-cyan-600 font-medium',
+  folder: 'text-blue-500',
+  file: 'text-gray-600',
 };
 
 /**
@@ -611,7 +622,7 @@ export function getNodeBehavior(nodeType: TreeNodeType, isContainer: boolean = f
   }
 
   // 叶子节点（tag、field等）
-  if (normalized === 'tag' || normalized === 'field') {
+  if (normalized === 'tag' || normalized === 'field' || normalized === 'file') {
     return {
       canExpand: false,
       canQuery: false,
@@ -620,6 +631,19 @@ export function getNodeBehavior(nodeType: TreeNodeType, isContainer: boolean = f
       doubleClickAction: 'none', // 可能打开详情对话框
       contextMenuType: 'info',
       description: '叶子节点'
+    };
+  }
+
+  // 对象存储节点
+  if (normalized === 'storage_bucket' || normalized === 'folder') {
+    return {
+      canExpand: true,
+      canQuery: false,
+      canDoubleClick: true,
+      hasActivationState: normalized === 'storage_bucket', // Bucket can be activated
+      doubleClickAction: normalized === 'storage_bucket' ? 'activate' : 'toggle', // 双击展开/收起
+      contextMenuType: 'container',
+      description: '对象存储文件夹/桶'
     };
   }
 

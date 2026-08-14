@@ -503,7 +503,9 @@ impl DatabaseClient {
                 let client = client.lock().await;
                 client.get_tree_nodes().await
             },
-            DatabaseClient::ObjectStorage(_) => Err(anyhow::anyhow!("此操作暂不支持对象存储")),
+            DatabaseClient::ObjectStorage(client) => {
+                client.get_tree_nodes().await
+            },
         }
     }
 

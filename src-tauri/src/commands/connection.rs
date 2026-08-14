@@ -1,4 +1,4 @@
-﻿use crate::models::{ConnectionConfig, ConnectionStatus, ConnectionTestResult};
+use crate::models::{ConnectionConfig, ConnectionStatus, ConnectionTestResult};
 use crate::services::ConnectionService;
 use crate::database::s3_client::S3ClientManager;
 use tauri::State;
@@ -78,7 +78,7 @@ pub async fn initialize_connections(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn establish_connection(
     connection_service: State<'_, ConnectionService>,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
     connection_id: String,
 ) -> Result<bool, String> {
     debug!("建立数据库连接: {}", connection_id);
@@ -123,7 +123,7 @@ pub async fn get_connection(
 #[tauri::command]
 pub async fn update_connection(
     connection_service: State<'_, ConnectionService>,
-    s3_manager: State<'_, Arc<Mutex<S3ClientManager>>>,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
     config: ConnectionConfig,
 ) -> Result<(), String> {
     debug!("处理更新连接命令: {}", config.name);

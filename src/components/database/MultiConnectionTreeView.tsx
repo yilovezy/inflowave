@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MultiConnectionTreeView - 多连接数据源树组件
  *
  * 基于 Headless Tree 实现的多连接树视图，用于 DatabaseExplorer
@@ -1637,6 +1637,35 @@ export const MultiConnectionTreeView: React.FC<MultiConnectionTreeViewProps> = (
             setExpandedNodeIds(prev => prev.filter(id => id !== nodeId));
           } else {
             // 如果子节点未加载，先加载再展开
+            if (nodeData.children === undefined && !loadedNodesRef.current.has(nodeId)) {
+              logger.debug(`子节点未加载，触发加载: ${nodeId}`);
+              await handleToggle(item.getId());
+            } else {
+              logger.debug(`子节点已加载，直接展开: ${nodeId}`);
+              setExpandedNodeIds(prev => prev.includes(nodeId) ? prev : [...prev, nodeId]);
+            }
+          }
+          return;
+        } else if (normalized === 'storage_bucket') {
+          // 对象存储桶节点
+          const bucket = nodeData.name;
+          const isActivated = isDatabaseOpened ? isDatabaseOpened(connectionId, `bucket:${bucket}`) : false;
+
+          logger.debug(`[双击 Storage Bucket] nodeId: ${nodeId}, isActivated: ${isActivated}, bucket: ${bucket}`);
+
+          // 如果 bucket 未打开，打开 bucket
+          if (!isActivated) {
+            logger.debug(`[打开 Storage Bucket] 双击未打开的 Bucket 节点: ${bucket}`);
+            nodesToAutoExpandRef.current.add(nodeId);
+            onNodeActivate?.(nodeData);
+            return;
+          }
+
+          // 如果 bucket 已打开，切换展开/收起
+          if (item.isExpanded()) {
+            logger.debug(`收起 Storage Bucket 节点: ${nodeId}`);
+            setExpandedNodeIds(prev => prev.filter(id => id !== nodeId));
+          } else {
             if (nodeData.children === undefined && !loadedNodesRef.current.has(nodeId)) {
               logger.debug(`子节点未加载，触发加载: ${nodeId}`);
               await handleToggle(item.getId());

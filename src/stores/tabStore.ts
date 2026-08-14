@@ -539,6 +539,10 @@ export const useTabOperations = () => {
         tabId: existingTab.id,
         tabTitle: existingTab.title,
       });
+      // 更新 defaultBucket
+      if (defaultBucket && existingTab.defaultBucket !== defaultBucket) {
+        updateTab(existingTab.id, { defaultBucket });
+      }
       // 如果tab已存在，切换到该tab
       setActiveKey(existingTab.id);
       logger.info(`✅ [createS3BrowserTab] 已切换到现有Tab: ${existingTab.id}`);

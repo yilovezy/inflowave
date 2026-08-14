@@ -391,7 +391,7 @@ impl ConnectionService {
     pub async fn update_connection(
         &self,
         mut config: ConnectionConfig,
-        s3_manager: Option<Arc<Mutex<S3ClientManager>>>,
+        s3_manager: Option<Arc<S3ClientManager>>,
     ) -> Result<()> {
         debug!("更新连接: {}", config.name);
 
@@ -612,8 +612,7 @@ impl ConnectionService {
                 };
 
                 // 在全局管理器中创建/更新客户端
-                let manager = s3_mgr.lock().await;
-                manager.create_client(&connection_id, &s3_connection_config).await
+                s3_mgr.create_client(&connection_id, &s3_connection_config).await
                     .context("在全局 S3ClientManager 中更新客户端失败")?;
                 info!("对象存储连接已更新到全局 S3ClientManager: {}", connection_id);
             }
@@ -771,7 +770,7 @@ impl ConnectionService {
     pub async fn establish_single_connection(
         &self,
         connection_id: &str,
-        s3_manager: Option<Arc<Mutex<S3ClientManager>>>,
+        s3_manager: Option<Arc<S3ClientManager>>,
     ) -> Result<()> {
         // 检查连接是否已经存在于管理器中
         if self.manager.connection_exists(connection_id).await {
@@ -859,8 +858,7 @@ impl ConnectionService {
                 };
 
                 // 在全局管理器中创建客户端
-                let manager = s3_mgr.lock().await;
-                manager.create_client(connection_id, &s3_connection_config).await
+                s3_mgr.create_client(connection_id, &s3_connection_config).await
                     .context("在全局 S3ClientManager 中创建客户端失败")?;
                 info!("对象存储连接已注册到全局 S3ClientManager: {}", connection_id);
             }

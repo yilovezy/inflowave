@@ -5,7 +5,7 @@ use crate::database::s3_client::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
-use tokio::sync::Mutex;
+use log::{info, error};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct S3UploadRequest {
@@ -21,6 +21,14 @@ pub struct S3DownloadRequest {
     pub connection_id: String,
     pub bucket: String,
     pub key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3DownloadFolderRequest {
+    pub connection_id: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub local_dir: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -270,6 +278,25 @@ pub async fn s3_download_object(
         .map_err(|e| e.to_string())
 }
 
+// 下载文件夹
+#[tauri::command]
+pub async fn s3_download_folder(
+    request: S3DownloadFolderRequest,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    s3_manager
+        .download_folder(
+            &request.connection_id,
+            &request.bucket,
+            &request.prefix,
+            &request.local_dir,
+            app,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 删除对象
 #[tauri::command]
 pub async fn s3_delete_object(
@@ -413,11 +440,7 @@ pub async fn s3_upload_file(
     content_type: Option<String>,
     s3_manager: State<'_, Arc<S3ClientManager>>,
 ) -> Result<(), String> {
-    // 读取文件
-    let data = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
-
+    info!("开始通过文件流上传到S3: {} -> bucket: {}, key: {}", file_path, bucket, key);
 
     // 如果没有提供content_type，尝试从文件扩展名猜测
     let final_content_type = content_type.or_else(|| {
@@ -427,9 +450,12 @@ pub async fn s3_upload_file(
     });
 
     s3_manager
-        .upload_object(&connection_id, &bucket, &key, data, final_content_type)
+        .upload_file_stream(&connection_id, &bucket, &key, &file_path, final_content_type)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            error!("文件流上传S3失败 (文件: {}): {}", file_path, e);
+            e.to_string()
+        })
 }
 
 // 下载文件（保存到指定路径）

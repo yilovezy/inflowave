@@ -493,6 +493,94 @@ pub async fn open_file_dialog(
     Ok(result)
 }
 
+/// 打开多个文件对话框
+#[tauri::command]
+pub async fn open_multiple_files_dialog(
+    app: tauri::AppHandle,
+    title: Option<String>,
+    filters: Option<Vec<FileFilter>>,
+) -> Result<Option<Vec<FileDialogResult>>, String> {
+    debug!("打开多文件对话框");
+
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app.dialog().file();
+
+    // 设置标题
+    if let Some(title_text) = title {
+        dialog = dialog.set_title(&title_text);
+    }
+
+    // 设置文件过滤器
+    if let Some(filter_list) = filters {
+        for filter in filter_list {
+            let extensions: Vec<&str> = filter.extensions.iter().map(|s| s.as_str()).collect();
+            dialog = dialog.add_filter(&filter.name, &extensions);
+        }
+    }
+
+    // 显示打开对话框
+    match dialog.blocking_pick_files() {
+        Some(file_paths) => {
+            let results: Vec<FileDialogResult> = file_paths
+                .iter()
+                .map(|file_path| {
+                    let path_buf = file_path.as_path().unwrap_or_else(|| std::path::Path::new(""));
+                    FileDialogResult {
+                        path: path_buf.to_string_lossy().to_string(),
+                        name: path_buf
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default(),
+                    }
+                })
+                .collect();
+            info!("文件打开对话框结果: {} files", results.len());
+            Ok(Some(results))
+        }
+        None => {
+            info!("用户取消了文件打开对话框");
+            Ok(None)
+        }
+    }
+}
+
+/// 打开目录对话框
+#[tauri::command]
+pub async fn open_directory_dialog(
+    app: tauri::AppHandle,
+    title: Option<String>,
+) -> Result<Option<FileDialogResult>, String> {
+    debug!("打开目录对话框");
+
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut dialog = app.dialog().file();
+
+    if let Some(title_text) = title {
+        dialog = dialog.set_title(&title_text);
+    }
+
+    match dialog.blocking_pick_folder() {
+        Some(folder_path) => {
+            let path_buf = folder_path.as_path().unwrap_or_else(|| std::path::Path::new(""));
+            let result = FileDialogResult {
+                path: path_buf.to_string_lossy().to_string(),
+                name: path_buf
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+            };
+            info!("目录打开对话框结果: {}", result.path);
+            Ok(Some(result))
+        }
+        None => {
+            info!("用户取消了目录打开对话框");
+            Ok(None)
+        }
+    }
+}
+
 /// 保存文件对话框
 #[tauri::command]
 pub async fn save_file_dialog(

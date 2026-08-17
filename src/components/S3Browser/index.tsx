@@ -73,8 +73,9 @@ import type { S3Object, S3Bucket, S3BrowserViewConfig, S3Provider } from '@/type
 import { getProviderCapabilities, isFeatureSupported, getSupportedAcls } from '@/types/s3-provider';
 import './S3Browser.css';
 import logger from '@/utils/logger';
-import { safeTauriInvoke } from '@/utils/tauri';
+import { safeTauriInvoke, isTauriEnvironment } from '@/utils/tauri';
 import { open as openInBrowser } from '@tauri-apps/plugin-shell';
+import { listen } from '@tauri-apps/api/event';
 import { useConnectionStore } from '@/store/connection';
 
 // 导入重构后的模块
@@ -135,7 +136,17 @@ export function clearConnectionLoadingState(connectionId: string): void {
   logger.info(`📦 [S3Browser] 清理连接 ${connectionId} 的加载状态`);
 }
 
-interface S3BrowserProps {
+interface DownloadProgressEvent {
+  status: string;
+  downloadedFiles: number;
+  totalFiles: number;
+  downloadedBytes: number;
+  totalBytes: number;
+  currentFile: string;
+  error?: string;
+}
+
+export interface S3BrowserProps {
   connectionId: string;
   connectionName?: string;
   defaultBucket?: string;
@@ -237,6 +248,43 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   const [previewObject, setPreviewObject] = useState<S3Object | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // 下载进度状态
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgressEvent | null>(null);
+  const [showDownloadProgress, setShowDownloadProgress] = useState(false);
+
+  // 监听下载进度事件
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    
+    const setupListener = async () => {
+      try {
+        unlisten = await listen<DownloadProgressEvent>('s3-download-progress', (event) => {
+          setDownloadProgress(event.payload);
+          setShowDownloadProgress(true);
+          
+          if (event.payload.status === 'completed' || event.payload.status === 'error') {
+            // Optional: Auto close after a few seconds or let the user close it
+            if (event.payload.status === 'error') {
+              showMessage.error(event.payload.error || t('s3:download.failed', { defaultValue: '下载失败' }));
+            } else if (event.payload.status === 'completed') {
+              showMessage.success(t('s3:download.folder_success', { 
+                defaultValue: `成功下载文件夹，包含 ${event.payload.totalFiles} 个文件` 
+              }));
+            }
+          }
+        });
+      } catch (err) {
+        logger.error('Failed to setup download progress listener:', err);
+      }
+    };
+    
+    setupListener();
+    
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
   const [previewProgress, setPreviewProgress] = useState<string>('');
   const [showShareInPreview, setShowShareInPreview] = useState(false);
   const [currentTempFile, setCurrentTempFile] = useState<string | null>(null);
@@ -521,7 +569,7 @@ const S3Browser: React.FC<S3BrowserProps> = ({
         size: 0,
         lastModified: bucket.creationDate || new Date(),
         isDirectory: true,
-        objectCount: undefined, // 初始为 undefined，表示正在加载
+        objectCount: -1, // -1 表示不自动计算对象数量（因为太耗时）
         acl: undefined, // 初始为 undefined，表示正在加载
       }));
 
@@ -586,8 +634,7 @@ const S3Browser: React.FC<S3BrowserProps> = ({
             }
           };
 
-          const [stats, acl] = await Promise.all([
-            S3Service.getBucketStats(connectionId, bucket.name),
+          const [acl] = await Promise.all([
             getPermissions()
           ]);
 
@@ -602,7 +649,6 @@ const S3Browser: React.FC<S3BrowserProps> = ({
 
           return {
             bucketName: bucket.name,
-            stats,
             acl
           };
         } catch (error) {
@@ -625,7 +671,8 @@ const S3Browser: React.FC<S3BrowserProps> = ({
               if (index !== -1) {
                 updatedObjects[index] = {
                   ...updatedObjects[index],
-                  objectCount: result!.stats.total_count,
+                  size: 0,
+                  objectCount: -1,
                   acl: result!.acl as 'private' | 'public-read' | 'public-read-write' | 'authenticated-read'
                 };
               }
@@ -1244,7 +1291,56 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   };
 
   const handleUpload = async () => {
-    fileInputRef.current?.click();
+    if (isTauriEnvironment()) {
+      try {
+        const results = await safeTauriInvoke<{ path: string; name: string }[] | null>('open_multiple_files_dialog', {
+          title: String(t('s3:upload.label')),
+        });
+
+        if (!results || results.length === 0) return;
+
+        setIsLoading(true);
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const file of results) {
+          try {
+            const uploadKey = currentPath
+              ? `${currentPath}${file.name}`
+              : file.name;
+            await S3Service.uploadFile(
+              connectionId,
+              currentBucket,
+              uploadKey,
+              file.path
+            );
+            successCount++;
+          } catch (error) {
+            failCount++;
+            logger.error(`Failed to upload ${file.name}:`, error);
+          }
+        }
+
+        setIsLoading(false);
+
+        if (successCount > 0) {
+          showMessage.success(
+            String(t('s3:upload.success', { count: successCount }))
+          );
+          loadObjects();
+        }
+
+        if (failCount > 0) {
+          showMessage.error(String(t('s3:upload.failed', { count: failCount })));
+        }
+      } catch (error) {
+        logger.error('Failed to open file dialog:', error);
+        // Fallback to standard input
+        fileInputRef.current?.click();
+      }
+    } else {
+      fileInputRef.current?.click();
+    }
   };
 
   const handleFileSelect = async (
@@ -1260,14 +1356,24 @@ const S3Browser: React.FC<S3BrowserProps> = ({
     for (const file of files) {
       try {
         const key = buildObjectPath(currentPath, file.name);
-        const data = await S3Service.fileToUint8Array(file);
-        await S3Service.uploadObject(
-          connectionId,
-          currentBucket,
-          key,
-          data,
-          file.type
-        );
+        if (isTauriEnvironment() && (file as any).path) {
+          await S3Service.uploadFile(
+            connectionId,
+            currentBucket,
+            key,
+            (file as any).path,
+            file.type || 'application/octet-stream'
+          );
+        } else {
+          const data = await S3Service.fileToUint8Array(file);
+          await S3Service.uploadObject(
+            connectionId,
+            currentBucket,
+            key,
+            data,
+            file.type || 'application/octet-stream'
+          );
+        }
         successCount++;
       } catch (error) {
         failCount++;
@@ -1311,51 +1417,83 @@ const S3Browser: React.FC<S3BrowserProps> = ({
     let failCount = 0;
 
     for (const object of toDownload) {
-      if (object.isDirectory) continue;
+      if (object.isDirectory) {
+        try {
+          // 显示原生目录选择对话框
+          const dialogResult = await safeTauriInvoke<{
+            path?: string;
+            name?: string;
+          } | null>('open_directory_dialog', {
+            title: String(t('s3:download.select_folder', { defaultValue: '选择保存目录' }))
+          });
 
-      try {
-        // 获取文件扩展名
-        const extension = getFileExtension(object.name);
+          // 用户取消了保存
+          if (!dialogResult || !dialogResult.path) {
+            continue;
+          }
 
-        // 显示原生文件保存对话框
-        const dialogResult = await safeTauriInvoke<{
-          path?: string;
-          name?: string;
-        } | null>('save_file_dialog', {
-          params: {
-            default_path: object.name,
-            filters: extension
-              ? [
-                  {
-                    name: `${extension.toUpperCase()} Files`,
-                    extensions: [extension],
-                  },
-                  { name: 'All Files', extensions: ['*'] },
-                ]
-              : [{ name: 'All Files', extensions: ['*'] }],
-          },
-        });
+          // 传递给后端进行递归下载
+          await S3Service.downloadFolder(
+            connectionId,
+            currentBucket,
+            object.key,
+            dialogResult.path
+          );
 
-        // 用户取消了保存
-        if (!dialogResult || !dialogResult.path) {
-          continue;
+          // We don't increment successCount here because the folder download 
+          // has its own progress modal and completion toast.
+        } catch (error) {
+          failCount++;
+          logger.error(`Download folder failed for ${object.name}:`, error);
+          showMessage.error(
+            `${String(t('s3:download.failed', { name: object.name }))}: ${error}`
+          );
         }
+      } else {
+        try {
+          // 获取文件扩展名
+          const extension = getFileExtension(object.name);
 
-        // 使用原生下载方法保存到用户选择的路径
-        await S3Service.downloadFile(
-          connectionId,
-          currentBucket,
-          object.key,
-          dialogResult.path
-        );
+          // 显示原生文件保存对话框
+          const dialogResult = await safeTauriInvoke<{
+            path?: string;
+            name?: string;
+          } | null>('save_file_dialog', {
+            params: {
+              default_path: object.name,
+              filters: extension
+                ? [
+                    {
+                      name: `${extension.toUpperCase()} Files`,
+                      extensions: [extension],
+                    },
+                    { name: 'All Files', extensions: ['*'] },
+                  ]
+                : [{ name: 'All Files', extensions: ['*'] }],
+            },
+          });
 
-        successCount++;
-      } catch (error) {
-        failCount++;
-        logger.error(`Download failed for ${object.name}:`, error);
-        showMessage.error(
-          `${String(t('s3:download.failed', { name: object.name }))}: ${error}`
-        );
+          // 用户取消了保存
+          if (!dialogResult || !dialogResult.path) {
+            continue;
+          }
+
+          // 使用原生下载方法保存到用户选择的路径
+          await S3Service.downloadFile(
+            connectionId,
+            currentBucket,
+            object.key,
+            dialogResult.path
+          );
+
+          successCount++;
+        } catch (error) {
+          failCount++;
+          logger.error(`Download failed for ${object.name}:`, error);
+          showMessage.error(
+            `${String(t('s3:download.failed', { name: object.name }))}: ${error}`
+          );
+        }
       }
     }
 
@@ -1983,14 +2121,25 @@ const S3Browser: React.FC<S3BrowserProps> = ({
         const uploadKey = currentPath
           ? `${currentPath}${file.name}`
           : file.name;
-        const data = await S3Service.fileToUint8Array(file);
-        await S3Service.uploadObject(
-          connectionId,
-          currentBucket,
-          uploadKey,
-          data,
-          file.type || 'application/octet-stream'
-        );
+        
+        if (isTauriEnvironment() && (file as any).path) {
+          await S3Service.uploadFile(
+            connectionId,
+            currentBucket,
+            uploadKey,
+            (file as any).path,
+            file.type || 'application/octet-stream'
+          );
+        } else {
+          const data = await S3Service.fileToUint8Array(file);
+          await S3Service.uploadObject(
+            connectionId,
+            currentBucket,
+            uploadKey,
+            data,
+            file.type || 'application/octet-stream'
+          );
+        }
         successCount++;
       } catch (error) {
         failCount++;
@@ -2656,7 +2805,7 @@ const S3Browser: React.FC<S3BrowserProps> = ({
                       <td className='p-2' style={{ width: columnWidths.count }}>
                         <span className='truncate block flex items-center gap-1'>
                           {object.objectCount !== undefined ? (
-                            object.objectCount
+                            object.objectCount === -1 ? '-' : object.objectCount
                           ) : (
                             <>
                               <span className='inline-block w-3 h-3 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin' />
@@ -4223,6 +4372,103 @@ const S3Browser: React.FC<S3BrowserProps> = ({
           )}
         </div>
       )}
+
+      {/* 下载进度对话框 */}
+      <Dialog open={showDownloadProgress} onOpenChange={(open) => {
+        if (!open && (!downloadProgress || downloadProgress.status === 'completed' || downloadProgress.status === 'error')) {
+          setShowDownloadProgress(false);
+        }
+      }}>
+        <DialogContent className="sm:max-w-[425px]" hideCloseButton={downloadProgress?.status === 'scanning' || downloadProgress?.status === 'downloading'}>
+          <DialogHeader>
+            <DialogTitle>
+              {downloadProgress?.status === 'scanning' && '扫描文件夹...'}
+              {downloadProgress?.status === 'downloading' && '正在下载...'}
+              {downloadProgress?.status === 'completed' && '下载完成'}
+              {downloadProgress?.status === 'error' && '下载出错'}
+            </DialogTitle>
+            <DialogDescription>
+              {downloadProgress?.status === 'scanning' && '正在获取文件列表和大小信息，请稍候...'}
+              {downloadProgress?.status === 'downloading' && '正在通过并发引擎下载文件。'}
+              {downloadProgress?.status === 'completed' && '所有文件已成功下载到本地。'}
+              {downloadProgress?.status === 'error' && '部分文件下载失败。'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {downloadProgress && (
+            <div className="py-4">
+              <div className="space-y-4">
+                {/* 文件数量进度 */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm font-medium">
+                    <span>文件数量</span>
+                    <span>{downloadProgress.downloadedFiles} / {downloadProgress.totalFiles}</span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full ${downloadProgress.status === 'error' ? 'bg-destructive' : 'bg-primary'}`}
+                      style={{
+                        width: downloadProgress.totalFiles > 0 
+                          ? `${(downloadProgress.downloadedFiles / downloadProgress.totalFiles) * 100}%` 
+                          : '0%'
+                      }}
+                    ></div>
+                  </div>
+                </div>
+
+                {/* 文件大小进度 */}
+                {(downloadProgress.totalBytes > 0 || downloadProgress.status === 'scanning') && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-sm font-medium">
+                      <span>已下载数据</span>
+                      <span>
+                        {downloadProgress.status === 'scanning' 
+                          ? `已发现: ${formatBytes(downloadProgress.totalBytes)}` 
+                          : `${formatBytes(downloadProgress.downloadedBytes)} / ${formatBytes(downloadProgress.totalBytes)}`
+                        }
+                      </span>
+                    </div>
+                    {downloadProgress.status !== 'scanning' && (
+                      <div className="w-full bg-secondary rounded-full h-2">
+                        <div
+                          className={`h-2 rounded-full ${downloadProgress.status === 'error' ? 'bg-destructive' : 'bg-primary'}`}
+                          style={{
+                            width: downloadProgress.totalBytes > 0 
+                              ? `${(downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100}%` 
+                              : '0%'
+                          }}
+                        ></div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 当前文件状态 */}
+                {downloadProgress.status === 'downloading' && downloadProgress.currentFile && (
+                  <div className="text-xs text-muted-foreground truncate" title={downloadProgress.currentFile}>
+                    当前: {downloadProgress.currentFile}
+                  </div>
+                )}
+                
+                {/* 错误信息 */}
+                {downloadProgress.status === 'error' && downloadProgress.error && (
+                  <div className="text-xs text-destructive bg-destructive/10 p-2 rounded max-h-24 overflow-y-auto">
+                    {downloadProgress.error}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            {(downloadProgress?.status === 'completed' || downloadProgress?.status === 'error') && (
+              <Button onClick={() => setShowDownloadProgress(false)}>
+                关闭
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

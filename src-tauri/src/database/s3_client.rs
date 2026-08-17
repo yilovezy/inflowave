@@ -60,6 +60,18 @@ pub struct S3UploadProgress {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgressEvent {
+    pub status: String,
+    pub downloaded_files: u32,
+    pub total_files: u32,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub current_file: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3PresignedUrlResult {
     pub url: String,
     pub expires_at: ChronoDateTime<Utc>,
@@ -550,6 +562,40 @@ impl S3ClientManager {
         Ok(())
     }
 
+    pub async fn upload_file_stream(
+        &self,
+        id: &str,
+        bucket: &str,
+        key: &str,
+        file_path: &str,
+        content_type: Option<String>,
+    ) -> Result<()> {
+        let client = self.get_client(id).await?;
+
+        let body = ByteStream::from_path(std::path::Path::new(file_path))
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read file stream from {}: {}", file_path, e))?;
+
+        let mut request = client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(body);
+
+        // 设置Content-Type
+        if let Some(ct) = content_type {
+            request = request.content_type(ct);
+        } else {
+            // 尝试从文件扩展名猜测MIME类型
+            if let Some(mime) = mime_guess::from_path(key).first() {
+                request = request.content_type(mime.to_string());
+            }
+        }
+
+        request.send().await?;
+        Ok(())
+    }
+
     pub async fn download_object(
         &self,
         id: &str,
@@ -567,6 +613,167 @@ impl S3ClientManager {
 
         let data = resp.body.collect().await?;
         Ok(data.into_bytes().to_vec())
+    }
+
+    pub async fn download_folder(
+        &self,
+        id: &str,
+        bucket: &str,
+        prefix: &str,
+        local_dir: &str,
+        app: tauri::AppHandle,
+    ) -> Result<()> {
+        use tauri::Emitter;
+        use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+        use futures::stream::{self, StreamExt};
+
+        let client = self.get_client(id).await?;
+        
+        // Extract the folder name from the prefix (e.g., "path/to/folder/" -> "folder")
+        let folder_name = prefix.trim_end_matches('/').split('/').last().unwrap_or("");
+        let base_path = std::path::Path::new(local_dir).join(folder_name);
+
+        // Phase 1: Pre-scan
+        let mut all_objects = Vec::new();
+        let mut total_bytes = 0;
+        let mut total_files = 0;
+        
+        let emit_progress = |app: &tauri::AppHandle, status: &str, d_files: u32, t_files: u32, d_bytes: u64, t_bytes: u64, curr_file: &str, err: Option<String>| {
+            let _ = app.emit("s3-download-progress", DownloadProgressEvent {
+                status: status.to_string(),
+                downloaded_files: d_files,
+                total_files: t_files,
+                downloaded_bytes: d_bytes,
+                total_bytes: t_bytes,
+                current_file: curr_file.to_string(),
+                error: err,
+            });
+        };
+
+        emit_progress(&app, "scanning", 0, 0, 0, 0, "Scanning folder...", None);
+
+        let mut marker = None;
+        loop {
+            let mut req = client.list_objects().bucket(bucket).prefix(prefix);
+            if let Some(m) = marker.clone() {
+                req = req.marker(m);
+            }
+
+            let resp = req.send().await.map_err(|e| anyhow::anyhow!("Failed to list objects: {}", e))?;
+            for obj in resp.contents() {
+                if let Some(obj_key) = obj.key() {
+                    if obj_key.ends_with('/') {
+                        continue;
+                    }
+                    let size = obj.size().unwrap_or(0);
+                    total_bytes += size as u64;
+                    total_files += 1;
+                    all_objects.push((obj_key.to_string(), size as u64));
+                }
+            }
+
+            if resp.is_truncated().unwrap_or(false) {
+                marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
+                    resp.contents().last().and_then(|obj| obj.key().map(|s| s.to_string()))
+                });
+            } else {
+                break;
+            }
+        }
+
+        // Emit ready to download
+        emit_progress(&app, "downloading", 0, total_files, 0, total_bytes, "Starting download...", None);
+
+        // Phase 2: Concurrent Download
+        let downloaded_files = Arc::new(AtomicU32::new(0));
+        let downloaded_bytes = Arc::new(AtomicU64::new(0));
+
+        let stream = stream::iter(all_objects.into_iter()).map(|(obj_key, size)| {
+            let client = client.clone();
+            let app = app.clone();
+            let base_path = base_path.to_path_buf();
+            let prefix_str = prefix.to_string();
+            let bucket_str = bucket.to_string();
+            let downloaded_files = downloaded_files.clone();
+            let downloaded_bytes = downloaded_bytes.clone();
+
+            async move {
+                let relative_path = if obj_key.starts_with(&prefix_str) {
+                    &obj_key[prefix_str.len()..]
+                } else {
+                    &obj_key
+                };
+
+                let local_file_path = base_path.join(relative_path);
+
+                if let Some(parent) = local_file_path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        return Err(anyhow::anyhow!("Failed to create dir: {}", e));
+                    }
+                }
+
+                let get_resp = client
+                    .get_object()
+                    .bucket(&bucket_str)
+                    .key(&obj_key)
+                    .send()
+                    .await;
+
+                match get_resp {
+                    Ok(resp) => {
+                        match resp.body.collect().await {
+                            Ok(data) => {
+                                if let Err(e) = tokio::fs::write(&local_file_path, data.into_bytes()).await {
+                                    return Err(anyhow::anyhow!("Failed to write file: {}", e));
+                                }
+                            }
+                            Err(e) => return Err(anyhow::anyhow!("Failed to collect body: {}", e)),
+                        }
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("Failed to get object: {}", e)),
+                }
+
+                // Update progress
+                let current_d_files = downloaded_files.fetch_add(1, Ordering::SeqCst) + 1;
+                let current_d_bytes = downloaded_bytes.fetch_add(size, Ordering::SeqCst) + size;
+
+                let _ = app.emit("s3-download-progress", DownloadProgressEvent {
+                    status: "downloading".to_string(),
+                    downloaded_files: current_d_files,
+                    total_files,
+                    downloaded_bytes: current_d_bytes,
+                    total_bytes,
+                    current_file: obj_key,
+                    error: None,
+                });
+
+                Ok(())
+            }
+        });
+
+        // Use buffer_unordered for concurrency (e.g. 5 concurrent downloads)
+        let results: Vec<Result<()>> = stream.buffer_unordered(5).collect().await;
+
+        let mut has_error = false;
+        let mut error_messages = Vec::new();
+        for res in results {
+            if let Err(e) = res {
+                has_error = true;
+                let err_str = e.to_string();
+                tracing::error!("Download error: {}", err_str);
+                error_messages.push(err_str);
+            }
+        }
+
+        if has_error {
+            let combined_error = error_messages.join("; ");
+            emit_progress(&app, "error", downloaded_files.load(Ordering::SeqCst), total_files, downloaded_bytes.load(Ordering::SeqCst), total_bytes, "", Some(combined_error.clone()));
+            return Err(anyhow::anyhow!("Download folder completed with errors: {}", combined_error));
+        } else {
+            emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Download completed successfully", None);
+        }
+
+        Ok(())
     }
 
     pub async fn delete_object(
@@ -594,35 +801,100 @@ impl S3ClientManager {
         keys: Vec<String>,
     ) -> Result<Vec<String>> {
         let client = self.get_client(id).await?;
+        let mut all_keys_to_delete = Vec::new();
 
-        let objects: Vec<_> = keys
-            .iter()
-            .map(|key| {
-                aws_sdk_s3::types::ObjectIdentifier::builder()
-                    .key(key)
-                    .build()
-                    .unwrap()
-            })
-            .collect();
+        // 展开所有的文件夹
+        for key in keys {
+            if key.ends_with('/') {
+                // 这是一个文件夹，需要列出下面所有的对象 (使用 V1 API 以保证最大兼容性)
+                let mut marker = None;
+                loop {
+                    let mut req = client.list_objects().bucket(bucket).prefix(&key);
+                    if let Some(m) = marker.clone() {
+                        req = req.marker(m);
+                    }
+                    
+                    let resp = req.send().await?;
+                    for obj in resp.contents() {
+                        if let Some(obj_key) = obj.key() {
+                            all_keys_to_delete.push(obj_key.to_string());
+                        }
+                    }
+                    
+                    if resp.is_truncated().unwrap_or(false) {
+                        marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
+                            resp.contents()
+                                .last()
+                                .and_then(|obj| obj.key().map(|s| s.to_string()))
+                        });
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                all_keys_to_delete.push(key);
+            }
+        }
+        
+        if all_keys_to_delete.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let delete = aws_sdk_s3::types::Delete::builder()
-            .set_objects(Some(objects))
-            .build()?;
+        let mut all_deleted = Vec::new();
+        let mut has_error = false;
+        let mut last_error = None;
 
-        let resp = client
-            .delete_objects()
-            .bucket(bucket)
-            .delete(delete)
-            .send()
-            .await?;
+        // AWS API limit is 1000 objects per delete request
+        for chunk in all_keys_to_delete.chunks(1000) {
+            let objects: Vec<_> = chunk
+                .iter()
+                .map(|k| {
+                    aws_sdk_s3::types::ObjectIdentifier::builder()
+                        .key(k)
+                        .build()
+                        .unwrap()
+                })
+                .collect();
 
-        let deleted = resp
-            .deleted()
-            .iter()
-            .filter_map(|d| d.key().map(|s| s.to_string()))
-            .collect();
+            let delete = aws_sdk_s3::types::Delete::builder()
+                .set_objects(Some(objects))
+                .build()?;
 
-        Ok(deleted)
+            let resp_result = client
+                .delete_objects()
+                .bucket(bucket)
+                .delete(delete)
+                .send()
+                .await;
+
+            match resp_result {
+                Ok(resp) => {
+                    let deleted: Vec<String> = resp
+                        .deleted()
+                        .iter()
+                        .filter_map(|d| d.key().map(|s| s.to_string()))
+                        .collect();
+                    all_deleted.extend(deleted);
+                }
+                Err(e) => {
+                    log::warn!("Batch delete_objects failed: {}, falling back to sequential delete_object", e);
+                    has_error = true;
+                    last_error = Some(anyhow::anyhow!(e.to_string()));
+                    for k in chunk {
+                        match self.delete_object(id, bucket, k).await {
+                            Ok(_) => all_deleted.push(k.to_string()),
+                            Err(err) => log::error!("Fallback delete failed for {}: {}", k, err),
+                        }
+                    }
+                }
+            }
+        }
+        
+        if all_deleted.is_empty() && has_error {
+            return Err(last_error.unwrap());
+        }
+        
+        Ok(all_deleted)
     }
 
     pub async fn copy_object(

@@ -159,10 +159,8 @@ const DataGripStyleLayout: React.FC<DataGripStyleLayoutProps> = ({
     // 右侧功能面板状态
     const [selectedFunction, setSelectedFunction] = useState<FunctionType | null>(null);
     const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(() => {
-        return (
-            preferences?.workspace.panel_sizes?.['right-panel-collapsed'] === 1 ||
-            true // 默认折叠
-        );
+        const val = preferences?.workspace.panel_sizes?.['right-panel-collapsed'];
+        return val !== undefined ? val === 1 : true; // 默认折叠
     });
 
     // 拖拽状态跟踪
@@ -195,14 +193,16 @@ const DataGripStyleLayout: React.FC<DataGripStyleLayoutProps> = ({
         };
 
         // 检查是否真的有变化，避免不必要的保存
+        const isDiff = (a: number | undefined, b: number) => a === undefined || Math.abs(a - b) > 0.1;
+
         const hasChanges =
             preferences.workspace.layout !== currentView ||
             preferences.workspace.panel_sizes?.['left-panel-collapsed'] !== (leftPanelCollapsed ? 1 : 0) ||
             preferences.workspace.panel_sizes?.['bottom-panel-collapsed'] !== (bottomPanelCollapsed ? 1 : 0) ||
             preferences.workspace.panel_sizes?.['right-panel-collapsed'] !== (rightPanelCollapsed ? 1 : 0) ||
-            preferences.workspace.panel_positions?.['left-panel'] !== leftPanelSize ||
-            preferences.workspace.panel_positions?.['bottom-panel'] !== bottomPanelSize ||
-            preferences.workspace.panel_positions?.['right-panel'] !== rightPanelSize;
+            isDiff(preferences.workspace.panel_positions?.['left-panel'], leftPanelSize) ||
+            isDiff(preferences.workspace.panel_positions?.['bottom-panel'], bottomPanelSize) ||
+            isDiff(preferences.workspace.panel_positions?.['right-panel'], rightPanelSize);
 
         if (hasChanges) {
             logger.info('工作区设置有变化，保存到用户偏好');

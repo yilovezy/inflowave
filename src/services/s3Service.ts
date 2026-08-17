@@ -132,6 +132,25 @@ export class S3Service {
   }
 
   /**
+   * 下载文件夹
+   */
+  static async downloadFolder(
+    connectionId: string,
+    bucket: string,
+    prefix: string,
+    localDir: string
+  ): Promise<void> {
+    await safeTauriInvoke<void>('s3_download_folder', {
+      request: {
+        connection_id: connectionId,
+        bucket,
+        prefix,
+        local_dir: localDir,
+      },
+    });
+  }
+
+  /**
    * 删除对象
    */
   static async deleteObject(

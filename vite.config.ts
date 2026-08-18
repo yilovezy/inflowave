@@ -65,8 +65,8 @@ export default defineConfig({
         // Tauri v2 webviews (Webview2, Webkit2GTK, WKWebView) all support es2021 natively.
         // Safari13 target can cause TDZ issues (Cannot access '$' before initialization) during esbuild minification.
         target: 'es2021',
-        // don't minify for debug builds
-        minify: process.env.TAURI_DEBUG === 'true' ? false : 'esbuild',
+        // don't minify for debug builds. Use terser instead of esbuild to fix echarts circular dependency TDZ error.
+        minify: process.env.TAURI_DEBUG === 'true' ? false : 'terser',
         // produce sourcemaps for debug builds
         sourcemap: process.env.TAURI_DEBUG === 'true',
         // 优化构建性能

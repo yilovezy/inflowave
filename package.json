@@ -1,6 +1,6 @@
 {
   "name": "inflowave",
-  "version": "0.9.5-4",
+  "version": "0.9.5-5",
   "description": "A modern time-series database management tool built with Tauri + React + TypeScript",
   "type": "module",
   "scripts": {
@@ -220,6 +220,7 @@
     "prettier": "^3.1.1",
     "sharp": "^0.34.3",
     "tailwindcss": "^3.3.6",
+    "terser": "^5.50.0",
     "typescript": "^5.2.2",
     "vite": "^5.0.8",
     "vitest": "^1.0.4"

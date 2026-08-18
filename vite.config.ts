@@ -62,8 +62,9 @@ export default defineConfig({
 
     // 构建配置
     build: {
-        // Tauri supports es2021
-        target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+        // Tauri v2 webviews (Webview2, Webkit2GTK, WKWebView) all support es2021 natively.
+        // Safari13 target can cause TDZ issues (Cannot access '$' before initialization) during esbuild minification.
+        target: 'es2021',
         // don't minify for debug builds
         minify: process.env.TAURI_DEBUG === 'true' ? false : 'esbuild',
         // produce sourcemaps for debug builds

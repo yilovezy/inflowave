@@ -32,6 +32,14 @@ pub struct S3DownloadFolderRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct S3DownloadFilesRequest {
+    pub connection_id: String,
+    pub bucket: String,
+    pub keys: Vec<String>,
+    pub local_dir: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct S3ListRequest {
     pub connection_id: String,
     pub bucket: String,
@@ -64,6 +72,14 @@ pub struct S3MoveRequest {
     pub source_key: String,
     pub dest_bucket: String,
     pub dest_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct S3UploadFolderRequest {
+    pub connection_id: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub local_dir: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -297,6 +313,25 @@ pub async fn s3_download_folder(
         .map_err(|e| e.to_string())
 }
 
+// 批量下载文件
+#[tauri::command]
+pub async fn s3_download_files(
+    request: S3DownloadFilesRequest,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    s3_manager
+        .download_files(
+            &request.connection_id,
+            &request.bucket,
+            request.keys,
+            &request.local_dir,
+            app,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // 删除对象
 #[tauri::command]
 pub async fn s3_delete_object(
@@ -456,6 +491,25 @@ pub async fn s3_upload_file(
             error!("文件流上传S3失败 (文件: {}): {}", file_path, e);
             e.to_string()
         })
+}
+
+// 上传文件夹
+#[tauri::command]
+pub async fn s3_upload_folder(
+    request: S3UploadFolderRequest,
+    s3_manager: State<'_, Arc<S3ClientManager>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    s3_manager
+        .upload_folder(
+            &request.connection_id,
+            &request.bucket,
+            &request.prefix,
+            &request.local_dir,
+            app,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // 下载文件（保存到指定路径）

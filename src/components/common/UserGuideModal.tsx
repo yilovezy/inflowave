@@ -117,7 +117,7 @@ const UserGuideModal: React.FC<UserGuideModalProps> = ({isOpen, onClose}) => {
 
     return (
         <Dialog open={isOpen} onOpenChange={handleClose}>
-            <DialogContent className='max-w-6xl w-[95vw] h-[90vh] p-0 flex flex-col user-guide-modal'>
+            <DialogContent className='w-[95vw] max-w-6xl h-[95vh] sm:h-[85vh] max-h-[800px] p-0 flex flex-col user-guide-modal overflow-hidden'>
                 <DialogHeader className='px-6 py-4 pr-12 border-b border-border flex-shrink-0'>
                     <DialogTitle className='flex items-center justify-between'>
                         <div className='flex items-center gap-3 flex-1 min-w-0'>

@@ -72,6 +72,18 @@ pub struct DownloadProgressEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadProgressEvent {
+    pub status: String, // "scanning", "uploading", "completed", "error"
+    pub uploaded_files: u32,
+    pub total_files: u32,
+    pub uploaded_bytes: u64,
+    pub total_bytes: u64,
+    pub current_file: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3PresignedUrlResult {
     pub url: String,
     pub expires_at: ChronoDateTime<Utc>,
@@ -596,6 +608,189 @@ impl S3ClientManager {
         Ok(())
     }
 
+    pub async fn upload_folder(
+        &self,
+        id: &str,
+        bucket: &str,
+        prefix: &str,
+        local_dir: &str,
+        app: tauri::AppHandle,
+    ) -> Result<()> {
+        use tauri::Emitter;
+        use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+        use std::sync::Arc;
+        use futures::stream::{self, StreamExt};
+        use std::time::Duration;
+        use jwalk::WalkDir;
+
+        let client = self.get_client(id).await?;
+        let base_path = std::path::PathBuf::from(local_dir);
+
+        let emit_progress = |app: &tauri::AppHandle, status: &str, u_files: u32, t_files: u32, u_bytes: u64, t_bytes: u64, curr_file: &str, err: Option<String>| {
+            let _ = app.emit("s3-upload-progress", UploadProgressEvent {
+                status: status.to_string(),
+                uploaded_files: u_files,
+                total_files: t_files,
+                uploaded_bytes: u_bytes,
+                total_bytes: t_bytes,
+                current_file: curr_file.to_string(),
+                error: err,
+            });
+        };
+
+        // Phase 1: Pre-scan using jwalk for blazing fast concurrent directory traversal
+        emit_progress(&app, "scanning", 0, 0, 0, 0, "Scanning folder...", None);
+
+        // Run the blocking walkdir in a spawn_blocking to not block the tokio executor
+        let base_path_clone = base_path.clone();
+        let (all_files, total_bytes, total_files) = tokio::task::spawn_blocking(move || {
+            let mut files = Vec::new();
+            let mut t_bytes = 0;
+            let mut t_files = 0;
+
+            for entry in WalkDir::new(&base_path_clone).sort(true) {
+                if let Ok(entry) = entry {
+                    if entry.file_type().is_file() {
+                        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        t_bytes += size;
+                        t_files += 1;
+                        files.push((entry.path(), size));
+                    }
+                }
+            }
+            (files, t_bytes, t_files)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to scan directory: {}", e))?;
+
+        if total_files == 0 {
+            emit_progress(&app, "completed", 0, 0, 0, 0, "Folder is empty", None);
+            return Ok(());
+        }
+
+        emit_progress(&app, "uploading", 0, total_files, 0, total_bytes, "Starting upload...", None);
+
+        // Phase 2: Concurrent Streaming Upload
+        let uploaded_files = Arc::new(AtomicU32::new(0));
+        let uploaded_bytes = Arc::new(AtomicU64::new(0));
+        let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        
+        let prefix_string = if prefix.is_empty() || prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{}/", prefix)
+        };
+
+        // Phase 3: Background Throttle Task for UI Updates
+        let uploaded_files_clone = uploaded_files.clone();
+        let uploaded_bytes_clone = uploaded_bytes.clone();
+        let app_clone = app.clone();
+        let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let is_done_clone = is_done.clone();
+
+        let throttle_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            while !is_done_clone.load(Ordering::Relaxed) {
+                interval.tick().await;
+                let c_files = uploaded_files_clone.load(Ordering::Relaxed);
+                let c_bytes = uploaded_bytes_clone.load(Ordering::Relaxed);
+                let _ = app_clone.emit("s3-upload-progress", UploadProgressEvent {
+                    status: "uploading".to_string(),
+                    uploaded_files: c_files,
+                    total_files,
+                    uploaded_bytes: c_bytes,
+                    total_bytes,
+                    current_file: "".to_string(),
+                    error: None,
+                });
+            }
+        });
+
+        let folder_name = base_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "folder".to_string());
+
+        // The streaming task
+        let stream = stream::iter(all_files.into_iter()).map(|(local_path, size)| {
+            let client = client.clone();
+            let base_path = base_path.clone();
+            let prefix_str = prefix_string.clone();
+            let bucket_str = bucket.to_string();
+            let uploaded_files = uploaded_files.clone();
+            let uploaded_bytes = uploaded_bytes.clone();
+            let has_error = has_error.clone();
+            let f_name = folder_name.clone();
+
+            async move {
+                // Calculate relative path for object key
+                let relative_path = match local_path.strip_prefix(&base_path) {
+                    Ok(p) => p.to_string_lossy().to_string().replace('\\', "/"),
+                    Err(_) => local_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                };
+                
+                let object_key = if relative_path.is_empty() {
+                    format!("{}{}", prefix_str, f_name)
+                } else {
+                    format!("{}{}/{}", prefix_str, f_name, relative_path)
+                };
+
+                let body_result = aws_sdk_s3::primitives::ByteStream::from_path(&local_path).await;
+                match body_result {
+                    Ok(body) => {
+                        let mut request = client
+                            .put_object()
+                            .bucket(&bucket_str)
+                            .key(&object_key)
+                            .body(body);
+                            
+                        if let Some(mime) = mime_guess::from_path(&local_path).first() {
+                            request = request.content_type(mime.to_string());
+                        }
+
+                        match request.send().await {
+                            Ok(_) => {
+                                uploaded_files.fetch_add(1, Ordering::Relaxed);
+                                uploaded_bytes.fetch_add(size, Ordering::Relaxed);
+                                Ok(())
+                            }
+                            Err(e) => {
+                                let err_msg = format!("Failed to upload {}: {}", object_key, e);
+                                tracing::error!("{}", err_msg);
+                                let mut errors = has_error.lock().await;
+                                errors.push(err_msg);
+                                Err(anyhow::anyhow!("Upload failed"))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let err_msg = format!("Failed to read file {}: {}", local_path.display(), e);
+                        tracing::error!("{}", err_msg);
+                        let mut errors = has_error.lock().await;
+                        errors.push(err_msg);
+                        Err(anyhow::anyhow!("Read failed"))
+                    }
+                }
+            }
+        });
+
+        // Concurrency level set to 20
+        let _: Vec<_> = stream.buffer_unordered(20).collect().await;
+
+        is_done.store(true, Ordering::Relaxed);
+        let _ = throttle_task.await;
+
+        let errors = has_error.lock().await;
+        if !errors.is_empty() {
+            let combined_error = errors.join("; ");
+            emit_progress(&app, "error", uploaded_files.load(Ordering::Relaxed), total_files, uploaded_bytes.load(Ordering::Relaxed), total_bytes, "", Some(combined_error.clone()));
+            return Err(anyhow::anyhow!("Upload folder completed with errors: {}", combined_error));
+        } else {
+            emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Upload completed successfully", None);
+        }
+
+        Ok(())
+    }
+
     pub async fn download_object(
         &self,
         id: &str,
@@ -771,6 +966,157 @@ impl S3ClientManager {
             return Err(anyhow::anyhow!("Download folder completed with errors: {}", combined_error));
         } else {
             emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Download completed successfully", None);
+        }
+
+        Ok(())
+    }
+
+    pub async fn download_files(
+        &self,
+        id: &str,
+        bucket: &str,
+        keys: Vec<String>,
+        local_dir: &str,
+        app: tauri::AppHandle,
+    ) -> Result<()> {
+        use tauri::Emitter;
+        use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+        use futures::stream::{self, StreamExt};
+
+        let client = self.get_client(id).await?;
+        let base_path = std::path::Path::new(local_dir);
+
+        let emit_progress = |app: &tauri::AppHandle, status: &str, d_files: u32, t_files: u32, d_bytes: u64, t_bytes: u64, curr_file: &str, err: Option<String>| {
+            let _ = app.emit("s3-download-progress", DownloadProgressEvent {
+                status: status.to_string(),
+                downloaded_files: d_files,
+                total_files: t_files,
+                downloaded_bytes: d_bytes,
+                total_bytes: t_bytes,
+                current_file: curr_file.to_string(),
+                error: err,
+            });
+        };
+
+        emit_progress(&app, "scanning", 0, 0, 0, 0, "Scanning files...", None);
+
+        // Phase 1: Pre-scan to get sizes
+        let mut all_objects = Vec::new();
+        let mut total_bytes = 0;
+        let mut total_files = 0;
+
+        for key in &keys {
+            // we can use head_object to get size, or just fetch directly. 
+            // Since head_object is sequential here, we'll try concurrent head_object
+        }
+        
+        // Concurrent head_object
+        let head_stream = stream::iter(keys.clone().into_iter()).map(|key| {
+            let client = client.clone();
+            let bucket_str = bucket.to_string();
+            async move {
+                let resp = client.head_object().bucket(&bucket_str).key(&key).send().await;
+                match resp {
+                    Ok(r) => Ok((key, r.content_length().unwrap_or(0) as u64)),
+                    Err(_) => Ok((key, 0)), // fallback
+                }
+            }
+        });
+        
+        let head_results: Vec<Result<(String, u64)>> = head_stream.buffer_unordered(10).collect().await;
+        for res in head_results {
+            if let Ok((key, size)) = res {
+                total_bytes += size;
+                total_files += 1;
+                all_objects.push((key, size));
+            }
+        }
+
+        // Emit ready to download
+        emit_progress(&app, "downloading", 0, total_files, 0, total_bytes, "Starting batch download...", None);
+
+        // Phase 2: Concurrent Download
+        let downloaded_files = Arc::new(AtomicU32::new(0));
+        let downloaded_bytes = Arc::new(AtomicU64::new(0));
+
+        let stream = stream::iter(all_objects.into_iter()).map(|(obj_key, size)| {
+            let client = client.clone();
+            let app = app.clone();
+            let base_path = base_path.to_path_buf();
+            let bucket_str = bucket.to_string();
+            let downloaded_files = downloaded_files.clone();
+            let downloaded_bytes = downloaded_bytes.clone();
+
+            async move {
+                // Get the base name of the file for saving in the local_dir directly
+                let file_name = std::path::Path::new(&obj_key).file_name().unwrap_or_default();
+                let local_file_path = base_path.join(file_name);
+
+                if let Some(parent) = local_file_path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        return Err(anyhow::anyhow!("Failed to create dir: {}", e));
+                    }
+                }
+
+                let get_resp = client
+                    .get_object()
+                    .bucket(&bucket_str)
+                    .key(&obj_key)
+                    .send()
+                    .await;
+
+                match get_resp {
+                    Ok(resp) => {
+                        match resp.body.collect().await {
+                            Ok(data) => {
+                                if let Err(e) = tokio::fs::write(&local_file_path, data.into_bytes()).await {
+                                    return Err(anyhow::anyhow!("Failed to write file: {}", e));
+                                }
+                            }
+                            Err(e) => return Err(anyhow::anyhow!("Failed to collect body: {}", e)),
+                        }
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("Failed to get object: {}", e)),
+                }
+
+                // Update progress
+                let current_d_files = downloaded_files.fetch_add(1, Ordering::SeqCst) + 1;
+                let current_d_bytes = downloaded_bytes.fetch_add(size, Ordering::SeqCst) + size;
+
+                let _ = app.emit("s3-download-progress", DownloadProgressEvent {
+                    status: "downloading".to_string(),
+                    downloaded_files: current_d_files,
+                    total_files,
+                    downloaded_bytes: current_d_bytes,
+                    total_bytes,
+                    current_file: obj_key,
+                    error: None,
+                });
+
+                Ok(())
+            }
+        });
+
+        // Use buffer_unordered for concurrency (e.g. 10 concurrent downloads)
+        let results: Vec<Result<()>> = stream.buffer_unordered(10).collect().await;
+
+        let mut has_error = false;
+        let mut error_messages = Vec::new();
+        for res in results {
+            if let Err(e) = res {
+                has_error = true;
+                let err_str = e.to_string();
+                tracing::error!("Download error: {}", err_str);
+                error_messages.push(err_str);
+            }
+        }
+
+        if has_error {
+            let combined_error = error_messages.join("; ");
+            emit_progress(&app, "error", downloaded_files.load(Ordering::SeqCst), total_files, downloaded_bytes.load(Ordering::SeqCst), total_bytes, "", Some(combined_error.clone()));
+            return Err(anyhow::anyhow!("Batch download completed with errors: {}", combined_error));
+        } else {
+            emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Batch download completed successfully", None);
         }
 
         Ok(())

@@ -406,16 +406,16 @@
       // 超时保护机制
       // ============================================================================
 
-      // 如果10秒后还没启动完成，显示错误（给予充足的启动时间）
+      // 如果30秒后还没启动完成，显示错误（给予充足的启动时间，特别是开发环境或低性能设备）
       setTimeout(() => {
         if (!hasAppStarted) {
           const loadingScreen = document.getElementById('loading-screen');
           if (loadingScreen && loadingScreen.style.display !== 'none') {
-            console.warn('⚠️ 应用启动超过10秒，显示超时错误');
+            console.warn('⚠️ 应用启动超过30秒，显示超时错误');
             showStartupError(messages.timeoutError);
           }
         }
-      }, 10000); // 10秒超时保护
+      }, 30000); // 30秒超时保护
       
       // 字体加载检测
       if ('fonts' in document) {

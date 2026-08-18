@@ -240,6 +240,25 @@ export class S3Service {
   }
 
   /**
+   * 上传文件夹
+   */
+  static async uploadFolder(
+    connectionId: string,
+    bucket: string,
+    prefix: string,
+    localDir: string
+  ): Promise<void> {
+    await safeTauriInvoke<void>('s3_upload_folder', {
+      request: {
+        connection_id: connectionId,
+        bucket,
+        prefix,
+        local_dir: localDir,
+      },
+    });
+  }
+
+  /**
    * 获取对象元数据
    */
   static async getObjectMetadata(
@@ -327,6 +346,25 @@ export class S3Service {
       bucket,
       key,
       savePath,
+    });
+  }
+
+  /**
+   * 批量并发下载文件
+   */
+  static async downloadFiles(
+    connectionId: string,
+    bucket: string,
+    keys: string[],
+    localDir: string
+  ): Promise<void> {
+    await safeTauriInvoke<void>('s3_download_files', {
+      request: {
+        connection_id: connectionId,
+        bucket,
+        keys,
+        local_dir: localDir,
+      }
     });
   }
 

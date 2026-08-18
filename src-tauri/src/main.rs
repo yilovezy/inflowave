@@ -872,7 +872,7 @@ async fn setup_embedded_server_if_needed(app_handle: tauri::AppHandle) -> Result
 
 /// 获取并设置响应式窗口大小
 fn setup_responsive_window_size(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("正在设置响应式窗口大小...");
+    info!("正在设置响应式窗口大小并居中...");
     
     // 获取主显示器信息
     match window.primary_monitor() {
@@ -880,120 +880,42 @@ fn setup_responsive_window_size(window: &tauri::WebviewWindow) -> Result<(), Box
             let screen_size = monitor.size();
             let scale_factor = monitor.scale_factor();
             
-            info!("检测到屏幕大小: {}x{}, 缩放因子: {}", 
-                  screen_size.width, screen_size.height, scale_factor);
+            // 将物理像素转换为逻辑像素
+            let logical_screen_width = screen_size.width as f64 / scale_factor;
+            let logical_screen_height = screen_size.height as f64 / scale_factor;
             
-            // 根据缩放因子调整窗口大小策略
-            let (target_width, target_height) = if scale_factor >= 1.5 {
-                // 高DPI显示器：使用固定的合理尺寸，避免窗口过大
-                let ideal_width: f64 = 1400.0;
-                let ideal_height: f64 = 900.0;
-
-                // 确保窗口不会超过屏幕的70%
-                let max_width = screen_size.width as f64 * 0.7;
-                let max_height = screen_size.height as f64 * 0.7;
-
-                let width = ideal_width.min(max_width).max(1000.0);
-                let height = ideal_height.min(max_height).max(700.0);
-                
-                info!("高DPI模式: 使用固定尺寸 {}x{}", width, height);
-                (width, height)
-            } else {
-                // 标准显示器：使用屏幕比例
-                let max_width = 1600.0;
-                let max_height = 1000.0;
-                let min_width = 1000.0;
-                let min_height = 700.0;
-                
-                // 计算目标尺寸（屏幕的75%，避免过大）
-                let width = (screen_size.width as f64 * 0.75).min(max_width).max(min_width);
-                let height = (screen_size.height as f64 * 0.75).min(max_height).max(min_height);
-                
-                info!("标准DPI模式: 使用屏幕比例 {}x{}", width, height);
-                (width, height)
-            };
+            // 设定目标大小为屏幕逻辑尺寸的 95%
+            let target_width = (logical_screen_width * 0.95).max(1000.0);
+            let target_height = (logical_screen_height * 0.95).max(700.0);
             
-            info!("计算出的窗口大小: {}x{}", target_width, target_height);
+            info!("计算出的窗口逻辑大小: {}x{}", target_width, target_height);
             
-            // 获取显示器位置和尺寸
+            // 获取显示器位置（物理像素）并转换为逻辑像素
             let monitor_position = monitor.position();
-            let screen_width = screen_size.width as f64;
-            let screen_height = screen_size.height as f64;
+            let logical_monitor_x = monitor_position.x as f64 / scale_factor;
+            let logical_monitor_y = monitor_position.y as f64 / scale_factor;
             
-            // 计算窗口在显示器中的居中位置
-            let center_x = monitor_position.x as f64 + (screen_width - target_width) / 2.0;
-            let center_y = monitor_position.y as f64 + (screen_height - target_height) / 2.0;
-            
-            // 确保位置不会超出显示器边界
-            let center_x = center_x.max(monitor_position.x as f64);
-            let center_y = center_y.max(monitor_position.y as f64);
-            
-            info!("显示器位置: ({}, {}), 计算出的中心位置: ({}, {})", 
-                  monitor_position.x, monitor_position.y, center_x, center_y);
+            // 计算窗口在显示器中的绝对居中逻辑位置
+            let center_x = logical_monitor_x + (logical_screen_width - target_width) / 2.0;
+            let center_y = logical_monitor_y + (logical_screen_height - target_height) / 2.0;
             
             // 设置窗口大小
             let logical_size = LogicalSize::new(target_width, target_height);
             if let Err(e) = window.set_size(logical_size) {
                 warn!("设置窗口大小失败: {}", e);
-            } else {
-                info!("窗口大小已设置: {}x{}", target_width, target_height);
             }
             
-            // 使用系统的center()方法，它能更好地处理不同的DPI和多显示器环境
-            if let Err(e) = window.center() {
-                warn!("系统居中方法失败: {}，尝试手动设置位置", e);
-                // 如果系统居中失败，则使用手动计算的位置作为备用
-                let center_position = LogicalPosition::new(center_x, center_y);
-                if let Err(e) = window.set_position(center_position) {
-                    warn!("手动设置窗口位置也失败: {}", e);
-                } else {
-                    info!("窗口已手动定位到计算位置: ({}, {})", center_x, center_y);
-                }
+            // 手动设置窗口位置实现精确居中
+            let center_position = LogicalPosition::new(center_x, center_y);
+            if let Err(e) = window.set_position(center_position) {
+                warn!("手动设置窗口位置失败: {}", e);
             } else {
-                info!("窗口已使用系统方法居中显示");
+                info!("窗口已精确居中: ({}, {})", center_x, center_y);
             }
-            
-            info!("响应式窗口大小设置完成: {}x{}", target_width, target_height);
         }
-        Ok(None) => {
-            warn!("无法获取主显示器信息，使用默认窗口大小和居中");
-            
-            // 设置默认大小
-            let default_width = 1400.0;
-            let default_height = 900.0;
-            if let Err(e) = window.set_size(LogicalSize::new(default_width, default_height)) {
-                warn!("设置默认窗口大小失败: {}", e);
-            } else {
-                info!("默认窗口大小已设置: {}x{}", default_width, default_height);
-            }
-            
-            // 使用系统居中方法
-            if let Err(e) = window.center() {
-                warn!("窗口居中失败: {}", e);
-            } else {
-                info!("默认窗口已居中显示");
-            }
-            
-        }
-        Err(e) => {
-            error!("获取显示器信息失败: {}, 使用错误恢复模式", e);
-            
-            // 设置默认大小
-            let default_width = 1400.0;
-            let default_height = 900.0;
-            if let Err(e) = window.set_size(LogicalSize::new(default_width, default_height)) {
-                warn!("设置默认窗口大小失败: {}", e);
-            } else {
-                info!("错误恢复模式下窗口大小已设置: {}x{}", default_width, default_height);
-            }
-            
-            // 使用系统居中方法
-            if let Err(e) = window.center() {
-                warn!("窗口居中失败: {}", e);
-            } else {
-                info!("错误恢复模式下窗口已居中显示");
-            }
-            
+        _ => {
+            warn!("无法获取主显示器信息，使用系统默认居中");
+            let _ = window.center();
         }
     }
     
@@ -1497,7 +1419,11 @@ async fn main() {
             s3_list_objects,
             s3_upload_object,
             s3_download_object,
+            s3_upload_file,
+            s3_download_file,
             s3_download_folder,
+            s3_download_files,
+            s3_upload_folder,
             s3_delete_object,
             s3_delete_objects,
             s3_copy_object,

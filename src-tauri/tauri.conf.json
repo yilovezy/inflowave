@@ -25,7 +25,7 @@
         "alwaysOnTop": false,
         "skipTaskbar": false,
         "titleBarStyle": "Visible",
-        "maximized": false,
+        "maximized": true,
         "visible": true,
         "shadow": true,
         "backgroundColor": "#ffffff",

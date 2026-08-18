@@ -354,6 +354,12 @@
         if (loadingText && !hasAppStarted) {
           loadingText.textContent = message;
           loadingText.style.color = '#ef4444';
+          loadingText.style.whiteSpace = 'pre-wrap';
+          loadingText.style.textAlign = 'left';
+          loadingText.style.wordBreak = 'break-all';
+          loadingText.style.maxWidth = '90vw';
+          loadingText.style.maxHeight = '50vh';
+          loadingText.style.overflow = 'auto';
 
           // 停止spinner动画
           const spinner = document.querySelector('.loading-spinner');
@@ -394,12 +400,14 @@
       // 监听错误事件
       window.addEventListener('error', function(event) {
         console.error('启动错误:', event.error);
-        showStartupError(messages.startupError);
+        let details = event.error ? (event.error.stack || event.error.toString()) : (event.message || "Unknown Error");
+        showStartupError(messages.startupError + "\n\nDetails:\n" + details);
       });
 
       window.addEventListener('unhandledrejection', function(event) {
         console.error('未处理的Promise拒绝:', event.reason);
-        showStartupError(messages.initError);
+        let details = event.reason ? (event.reason.stack || event.reason.toString()) : "Unknown Promise rejection";
+        showStartupError(messages.initError + "\n\nDetails:\n" + details);
       });
 
       // ============================================================================

@@ -629,27 +629,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
 
   # 调用独立的 R2 上传 workflow（可选，如需禁用请注释掉此 job）
-  upload-to-r2:
-    needs: [detect-version, build-release]
-    if: needs.detect-version.outputs.should_release == 'true'
-    uses: ./.github/workflows/upload-to-r2.yml
-    secrets: inherit
-    with:
-      version: ${{ needs.detect-version.outputs.version }}
-      # 默认上传 macOS ARM64 和 Windows x64 MSI
-      upload_macos_arm64: true
-      upload_windows_x64_msi: true
-      # 其他包默认不上传，可根据需要修改
-      upload_macos_x64: false
-      upload_windows_x64_nsis: false
-      upload_windows_x86_msi: false
-      upload_windows_x86_nsis: false
-      upload_linux_x64_deb: false
-      upload_linux_x64_rpm: false
-      upload_linux_x64_appimage: false
-      upload_linux_arm64_deb: false
-      upload_linux_arm64_rpm: false
-      upload_linux_arm64_appimage: false
-      # 更新选项
-      update_release_notes: true
-      update_readme: true
+  # upload-to-r2:
+  #   needs: [detect-version, build-release]
+  #   if: needs.detect-version.outputs.should_release == 'true'
+  #   uses: ./.github/workflows/upload-to-r2.yml
+  #   secrets: inherit
+  #   with:
+  #     version: ${{ needs.detect-version.outputs.version }}
+  #     # 默认上传 macOS ARM64 和 Windows x64 MSI
+  #     upload_macos_arm64: true
+  #     upload_windows_x64_msi: true
+  #     # 其他包默认不上传，可根据需要修改
+  #     upload_macos_x64: false
+  #     upload_windows_x64_nsis: false
+  #     upload_windows_x86_msi: false
+  #     upload_windows_x86_nsis: false
+  #     upload_linux_x64_deb: false
+  #     upload_linux_x64_rpm: false
+  #     upload_linux_x64_appimage: false
+  #     upload_linux_arm64_deb: false
+  #     upload_linux_arm64_rpm: false
+  #     upload_linux_arm64_appimage: false
+  #     # 更新选项
+  #     update_release_notes: true
+  #     update_readme: true

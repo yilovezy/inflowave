@@ -75,23 +75,13 @@ export default defineConfig({
         rollupOptions: {
             output: {
                 manualChunks(id: string) {
-                    // 自动将 node_modules 中的第三方库拆包
+                    // 对于桌面应用，不需要过度分包，过度分包会导致跨 chunk 的循环依赖（TDZ问题）
                     if (id.includes('node_modules')) {
-                        if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
-                            return 'vendor';
-                        }
-                        if (id.includes('echarts')) {
-                            return 'charts';
-                        }
-                        if (id.includes('codemirror') || id.includes('@codemirror') || id.includes('@lezer')) {
-                            return 'editor';
-                        }
                         if (id.includes('@tauri-apps')) {
                             return 'tauri';
                         }
-                        if (id.includes('i18next') || id.includes('react-i18next')) {
-                            return 'i18n';
-                        }
+                        // 所有的其它依赖打成一个大的 vendor 包，以防止交叉引用 TDZ
+                        return 'vendor';
                     }
                 },
                 // 优化输出文件名

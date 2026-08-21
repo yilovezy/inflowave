@@ -109,7 +109,7 @@ Then enter your macOS password to allow the app to run normally.
 - 📥 **[InflowWave_0.9.4_amd64.deb](https://github.com/chenqi92/inflowave/releases/download/v0.9.5-2/InflowWave_0.9.4_amd64.deb)**
   - ✅ Ubuntu 18.04+, Debian 10+
   - ✅ Better system integration, supports auto-updates
-  - 📋 Install command: `sudo dpkg -i InflowWave_0.9.5-6-5-4-3-2_amd64.deb`
+  - 📋 Install command: `sudo dpkg -i InflowWave_0.9.5-7-6-5-4-3-2_amd64.deb`
   - 🔧 Fix dependencies: `sudo apt-get install -f`
 
 **Universal Linux (Works Everywhere)**
@@ -117,13 +117,13 @@ Then enter your macOS password to allow the app to run normally.
   - ✅ Works on most x64 Linux distributions
   - ✅ No installation required, run directly
   - ✅ Portable version, doesn't affect system
-  - 📋 Usage: `chmod +x InflowWave_0.9.5-6-5-4-3-2_amd64.AppImage && ./InflowWave_0.9.4_amd64.AppImage`
+  - 📋 Usage: `chmod +x InflowWave_0.9.5-7-6-5-4-3-2_amd64.AppImage && ./InflowWave_0.9.4_amd64.AppImage`
 
 **RPM Family (CentOS/RHEL/Fedora)**
 - 📥 **[InflowWave-0.9.4-1.x86_64.rpm](https://github.com/chenqi92/inflowave/releases/download/v0.9.5-2/InflowWave-0.9.4-1.x86_64.rpm)**
   - ✅ CentOS 7+, RHEL 7+, Fedora 30+
-  - 📋 Install command: `sudo rpm -i InflowWave-0.9.5-6-5-4-3-2-1.x86_64.rpm`
-  - 📋 Or use: `sudo dnf install InflowWave-0.9.5-6-5-4-3-2-1.x86_64.rpm`
+  - 📋 Install command: `sudo rpm -i InflowWave-0.9.5-7-6-5-4-3-2-1.x86_64.rpm`
+  - 📋 Or use: `sudo dnf install InflowWave-0.9.5-7-6-5-4-3-2-1.x86_64.rpm`
 
 ### ⚠️ System Requirements
 

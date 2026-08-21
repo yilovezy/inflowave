@@ -622,6 +622,8 @@ impl S3ClientManager {
         use futures::stream::{self, StreamExt};
         use std::time::Duration;
         use jwalk::WalkDir;
+        use tokio::sync::mpsc;
+        use tokio_stream::wrappers::ReceiverStream;
 
         let client = self.get_client(id).await?;
         let base_path = std::path::PathBuf::from(local_dir);
@@ -638,80 +640,80 @@ impl S3ClientManager {
             });
         };
 
-        // Phase 1: Pre-scan using jwalk for blazing fast concurrent directory traversal
-        emit_progress(&app, "scanning", 0, 0, 0, 0, "Scanning folder...", None);
-
-        // Run the blocking walkdir in a spawn_blocking to not block the tokio executor
-        let base_path_clone = base_path.clone();
-        let (all_files, total_bytes, total_files) = tokio::task::spawn_blocking(move || {
-            let mut files = Vec::new();
-            let mut t_bytes = 0;
-            let mut t_files = 0;
-
-            for entry in WalkDir::new(&base_path_clone).sort(true) {
-                if let Ok(entry) = entry {
-                    if entry.file_type().is_file() {
-                        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                        t_bytes += size;
-                        t_files += 1;
-                        files.push((entry.path(), size));
-                    }
-                }
-            }
-            (files, t_bytes, t_files)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to scan directory: {}", e))?;
-
-        if total_files == 0 {
-            emit_progress(&app, "completed", 0, 0, 0, 0, "Folder is empty", None);
-            return Ok(());
-        }
-
-        emit_progress(&app, "uploading", 0, total_files, 0, total_bytes, "Starting upload...", None);
-
-        // Phase 2: Concurrent Streaming Upload
+        let total_files = Arc::new(AtomicU32::new(0));
+        let total_bytes = Arc::new(AtomicU64::new(0));
         let uploaded_files = Arc::new(AtomicU32::new(0));
         let uploaded_bytes = Arc::new(AtomicU64::new(0));
         let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        
+
         let prefix_string = if prefix.is_empty() || prefix.ends_with('/') {
             prefix.to_string()
         } else {
             format!("{}/", prefix)
         };
 
-        // Phase 3: Background Throttle Task for UI Updates
-        let uploaded_files_clone = uploaded_files.clone();
-        let uploaded_bytes_clone = uploaded_bytes.clone();
-        let app_clone = app.clone();
+        let folder_name = base_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "folder".to_string());
+
+        emit_progress(&app, "uploading", 0, 0, 0, 0, "Starting upload pipeline...", None);
+
+        // Throttle Task for UI Updates
         let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let is_done_clone = is_done.clone();
+        let app_clone = app.clone();
+        
+        let t_files_clone = total_files.clone();
+        let t_bytes_clone = total_bytes.clone();
+        let u_files_clone = uploaded_files.clone();
+        let u_bytes_clone = uploaded_bytes.clone();
 
         let throttle_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(100));
             while !is_done_clone.load(Ordering::Relaxed) {
                 interval.tick().await;
-                let c_files = uploaded_files_clone.load(Ordering::Relaxed);
-                let c_bytes = uploaded_bytes_clone.load(Ordering::Relaxed);
+                let c_files = u_files_clone.load(Ordering::Relaxed);
+                let c_bytes = u_bytes_clone.load(Ordering::Relaxed);
+                let tot_files = t_files_clone.load(Ordering::Relaxed);
+                let tot_bytes = t_bytes_clone.load(Ordering::Relaxed);
+                
                 let _ = app_clone.emit("s3-upload-progress", UploadProgressEvent {
                     status: "uploading".to_string(),
                     uploaded_files: c_files,
-                    total_files,
+                    total_files: tot_files,
                     uploaded_bytes: c_bytes,
-                    total_bytes,
+                    total_bytes: tot_bytes,
                     current_file: "".to_string(),
                     error: None,
                 });
             }
         });
 
-        let folder_name = base_path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "folder".to_string());
+        // Producer: Scan folder and send to channel
+        let (tx, rx) = mpsc::channel(10000); // 10k capacity to prevent memory bloat
+        let base_path_clone = base_path.clone();
+        let t_files_prod = total_files.clone();
+        let t_bytes_prod = total_bytes.clone();
 
-        // The streaming task
-        let stream = stream::iter(all_files.into_iter()).map(|(local_path, size)| {
+        let scan_task = tokio::task::spawn_blocking(move || {
+            for entry in WalkDir::new(&base_path_clone).sort(false) {
+                if let Ok(entry) = entry {
+                    if entry.file_type().is_file() {
+                        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                        t_files_prod.fetch_add(1, Ordering::Relaxed);
+                        t_bytes_prod.fetch_add(size, Ordering::Relaxed);
+                        // If channel is full or closed, blocking_send waits or errors
+                        if tx.blocking_send((entry.path(), size)).is_err() {
+                            break; // Consumer dropped, stop scanning
+                        }
+                    }
+                }
+            }
+        });
+
+        // Consumer: Stream uploads
+        let rx_stream = ReceiverStream::new(rx);
+        let stream = rx_stream.map(|(local_path, size)| {
             let client = client.clone();
             let base_path = base_path.clone();
             let prefix_str = prefix_string.clone();
@@ -773,19 +775,32 @@ impl S3ClientManager {
             }
         });
 
-        // Concurrency level set to 20
+        // Process up to 20 files concurrently
         let _: Vec<_> = stream.buffer_unordered(20).collect().await;
+
+        // Wait for scan to complete just in case
+        let _ = scan_task.await;
 
         is_done.store(true, Ordering::Relaxed);
         let _ = throttle_task.await;
 
+        let tf = total_files.load(Ordering::Relaxed);
+        let tb = total_bytes.load(Ordering::Relaxed);
+        let uf = uploaded_files.load(Ordering::Relaxed);
+        let ub = uploaded_bytes.load(Ordering::Relaxed);
+
+        if tf == 0 {
+            emit_progress(&app, "completed", 0, 0, 0, 0, "Folder is empty", None);
+            return Ok(());
+        }
+
         let errors = has_error.lock().await;
         if !errors.is_empty() {
             let combined_error = errors.join("; ");
-            emit_progress(&app, "error", uploaded_files.load(Ordering::Relaxed), total_files, uploaded_bytes.load(Ordering::Relaxed), total_bytes, "", Some(combined_error.clone()));
+            emit_progress(&app, "error", uf, tf, ub, tb, "", Some(combined_error.clone()));
             return Err(anyhow::anyhow!("Upload folder completed with errors: {}", combined_error));
         } else {
-            emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Upload completed successfully", None);
+            emit_progress(&app, "completed", tf, tf, tb, tb, "Upload completed successfully", None);
         }
 
         Ok(())

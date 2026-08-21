@@ -1276,102 +1276,128 @@ impl S3ClientManager {
         id: &str,
         bucket: &str,
         keys: Vec<String>,
-    ) -> Result<Vec<String>> {
+    ) -> Result<u32> {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use futures::stream::{self, StreamExt};
+        use tokio::sync::mpsc;
+        use tokio_stream::wrappers::ReceiverStream;
+
         let client = self.get_client(id).await?;
-        let mut all_keys_to_delete = Vec::new();
+        let total_deleted = Arc::new(AtomicU32::new(0));
+        let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
-        // 展开所有的文件夹
-        for key in keys {
-            if key.ends_with('/') {
-                // 这是一个文件夹，需要列出下面所有的对象 (使用 V1 API 以保证最大兼容性)
-                let mut marker = None;
-                loop {
-                    let mut req = client.list_objects().bucket(bucket).prefix(&key);
-                    if let Some(m) = marker.clone() {
-                        req = req.marker(m);
-                    }
-                    
-                    let resp = req.send().await?;
-                    for obj in resp.contents() {
-                        if let Some(obj_key) = obj.key() {
-                            all_keys_to_delete.push(obj_key.to_string());
+        // Producer: paginate through keys, expand folders, and push chunks of up to 1000
+        let (tx, rx) = mpsc::channel::<Vec<String>>(100);
+        let client_clone = client.clone();
+        let bucket_str = bucket.to_string();
+
+        let scan_task = tokio::spawn(async move {
+            let mut current_chunk = Vec::with_capacity(1000);
+            
+            for key in keys {
+                if key.ends_with('/') {
+                    let mut marker = None;
+                    loop {
+                        let mut req = client_clone.list_objects().bucket(&bucket_str).prefix(&key);
+                        if let Some(m) = marker.clone() {
+                            req = req.marker(m);
+                        }
+
+                        match req.send().await {
+                            Ok(resp) => {
+                                for obj in resp.contents() {
+                                    if let Some(obj_key) = obj.key() {
+                                        current_chunk.push(obj_key.to_string());
+                                        if current_chunk.len() == 1000 {
+                                            let chunk_to_send = std::mem::replace(&mut current_chunk, Vec::with_capacity(1000));
+                                            if tx.send(chunk_to_send).await.is_err() { return; }
+                                        }
+                                    }
+                                }
+
+                                if resp.is_truncated().unwrap_or(false) {
+                                    marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
+                                        resp.contents().last().and_then(|obj| obj.key().map(|s| s.to_string()))
+                                    });
+                                    if marker.is_none() { break; }
+                                } else {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to list objects in {}: {}", key, e);
+                                break;
+                            }
                         }
                     }
-                    
-                    if resp.is_truncated().unwrap_or(false) {
-                        marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
-                            resp.contents()
-                                .last()
-                                .and_then(|obj| obj.key().map(|s| s.to_string()))
-                        });
-                    } else {
-                        break;
-                    }
-                }
-            } else {
-                all_keys_to_delete.push(key);
-            }
-        }
-        
-        if all_keys_to_delete.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut all_deleted = Vec::new();
-        let mut has_error = false;
-        let mut last_error = None;
-
-        // AWS API limit is 1000 objects per delete request
-        for chunk in all_keys_to_delete.chunks(1000) {
-            let objects: Vec<_> = chunk
-                .iter()
-                .map(|k| {
-                    aws_sdk_s3::types::ObjectIdentifier::builder()
-                        .key(k)
-                        .build()
-                        .unwrap()
-                })
-                .collect();
-
-            let delete = aws_sdk_s3::types::Delete::builder()
-                .set_objects(Some(objects))
-                .build()?;
-
-            let resp_result = client
-                .delete_objects()
-                .bucket(bucket)
-                .delete(delete)
-                .send()
-                .await;
-
-            match resp_result {
-                Ok(resp) => {
-                    let deleted: Vec<String> = resp
-                        .deleted()
-                        .iter()
-                        .filter_map(|d| d.key().map(|s| s.to_string()))
-                        .collect();
-                    all_deleted.extend(deleted);
-                }
-                Err(e) => {
-                    log::warn!("Batch delete_objects failed: {}, falling back to sequential delete_object", e);
-                    has_error = true;
-                    last_error = Some(anyhow::anyhow!(e.to_string()));
-                    for k in chunk {
-                        match self.delete_object(id, bucket, k).await {
-                            Ok(_) => all_deleted.push(k.to_string()),
-                            Err(err) => log::error!("Fallback delete failed for {}: {}", k, err),
-                        }
+                } else {
+                    current_chunk.push(key);
+                    if current_chunk.len() == 1000 {
+                        let chunk_to_send = std::mem::replace(&mut current_chunk, Vec::with_capacity(1000));
+                        if tx.send(chunk_to_send).await.is_err() { return; }
                     }
                 }
             }
+
+            if !current_chunk.is_empty() {
+                let _ = tx.send(current_chunk).await;
+            }
+        });
+
+        // Consumer: receive chunks and delete concurrently
+        let rx_stream = ReceiverStream::new(rx);
+        let stream = rx_stream.map(|chunk| {
+            let client = client.clone();
+            let bucket_str = bucket.to_string();
+            let total_deleted = total_deleted.clone();
+            let has_error = has_error.clone();
+
+            async move {
+                let objects: Vec<_> = chunk
+                    .iter()
+                    .map(|k| {
+                        aws_sdk_s3::types::ObjectIdentifier::builder()
+                            .key(k)
+                            .build()
+                            .unwrap()
+                    })
+                    .collect();
+
+                let delete_req = match aws_sdk_s3::types::Delete::builder().set_objects(Some(objects)).build() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let mut errors = has_error.lock().await;
+                        errors.push(format!("Failed to build delete request: {}", e));
+                        return;
+                    }
+                };
+
+                match client.delete_objects().bucket(&bucket_str).delete(delete_req).send().await {
+                    Ok(resp) => {
+                        let deleted_count = resp.deleted().len() as u32;
+                        total_deleted.fetch_add(deleted_count, Ordering::Relaxed);
+                    }
+                    Err(e) => {
+                        tracing::error!("Batch delete failed: {}", e);
+                        let mut errors = has_error.lock().await;
+                        errors.push(format!("Batch delete failed: {}", e));
+                    }
+                }
+            }
+        });
+
+        // Concurrency level for deleting chunks of 1000 items
+        let _: Vec<_> = stream.buffer_unordered(5).collect().await;
+
+        let _ = scan_task.await;
+
+        let errors = has_error.lock().await;
+        if !errors.is_empty() {
+            return Err(anyhow::anyhow!("Delete objects completed with errors: {}", errors.join("; ")));
         }
-        
-        if all_deleted.is_empty() && has_error {
-            return Err(last_error.unwrap());
-        }
-        
-        Ok(all_deleted)
+
+        Ok(total_deleted.load(Ordering::Relaxed))
     }
 
     pub async fn copy_object(

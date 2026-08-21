@@ -172,8 +172,8 @@ export class S3Service {
     connectionId: string,
     bucket: string,
     keys: string[]
-  ): Promise<string[]> {
-    return await safeTauriInvoke<string[]>('s3_delete_objects', {
+  ): Promise<number> {
+    return await safeTauriInvoke<number>('s3_delete_objects', {
       request: {
         connection_id: connectionId,
         bucket,

@@ -1686,13 +1686,13 @@ const S3Browser: React.FC<S3BrowserProps> = ({
     setIsLoading(true);
 
     try {
-      const deletedKeys = await S3Service.deleteObjects(
+      const deletedCount = await S3Service.deleteObjects(
         connectionId,
         currentBucket,
         objectKeys
       );
       showMessage.success(
-        String(t('s3:delete.success', { count: deletedKeys.length }))
+        String(t('s3:delete.success', { count: deletedCount }))
       );
       setSelectedObjects(new Set());
       loadObjects();

@@ -835,19 +835,18 @@ impl S3ClientManager {
     ) -> Result<()> {
         use tauri::Emitter;
         use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+        use std::sync::Arc;
         use futures::stream::{self, StreamExt};
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+        use tokio_stream::wrappers::ReceiverStream;
+        use tokio::io::AsyncWriteExt;
 
         let client = self.get_client(id).await?;
         
-        // Extract the folder name from the prefix (e.g., "path/to/folder/" -> "folder")
         let folder_name = prefix.trim_end_matches('/').split('/').last().unwrap_or("");
         let base_path = std::path::Path::new(local_dir).join(folder_name);
 
-        // Phase 1: Pre-scan
-        let mut all_objects = Vec::new();
-        let mut total_bytes = 0;
-        let mut total_files = 0;
-        
         let emit_progress = |app: &tauri::AppHandle, status: &str, d_files: u32, t_files: u32, d_bytes: u64, t_bytes: u64, curr_file: &str, err: Option<String>| {
             let _ = app.emit("s3-download-progress", DownloadProgressEvent {
                 status: status.to_string(),
@@ -860,52 +859,106 @@ impl S3ClientManager {
             });
         };
 
-        emit_progress(&app, "scanning", 0, 0, 0, 0, "Scanning folder...", None);
-
-        let mut marker = None;
-        loop {
-            let mut req = client.list_objects().bucket(bucket).prefix(prefix);
-            if let Some(m) = marker.clone() {
-                req = req.marker(m);
-            }
-
-            let resp = req.send().await.map_err(|e| anyhow::anyhow!("Failed to list objects: {}", e))?;
-            for obj in resp.contents() {
-                if let Some(obj_key) = obj.key() {
-                    if obj_key.ends_with('/') {
-                        continue;
-                    }
-                    let size = obj.size().unwrap_or(0);
-                    total_bytes += size as u64;
-                    total_files += 1;
-                    all_objects.push((obj_key.to_string(), size as u64));
-                }
-            }
-
-            if resp.is_truncated().unwrap_or(false) {
-                marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
-                    resp.contents().last().and_then(|obj| obj.key().map(|s| s.to_string()))
-                });
-            } else {
-                break;
-            }
-        }
-
-        // Emit ready to download
-        emit_progress(&app, "downloading", 0, total_files, 0, total_bytes, "Starting download...", None);
-
-        // Phase 2: Concurrent Download
+        let total_files = Arc::new(AtomicU32::new(0));
+        let total_bytes = Arc::new(AtomicU64::new(0));
         let downloaded_files = Arc::new(AtomicU32::new(0));
         let downloaded_bytes = Arc::new(AtomicU64::new(0));
+        let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
-        let stream = stream::iter(all_objects.into_iter()).map(|(obj_key, size)| {
+        emit_progress(&app, "downloading", 0, 0, 0, 0, "Starting download pipeline...", None);
+
+        // Throttle Task for UI Updates
+        let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let is_done_clone = is_done.clone();
+        let app_clone = app.clone();
+        
+        let t_files_clone = total_files.clone();
+        let t_bytes_clone = total_bytes.clone();
+        let d_files_clone = downloaded_files.clone();
+        let d_bytes_clone = downloaded_bytes.clone();
+
+        let throttle_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            while !is_done_clone.load(Ordering::Relaxed) {
+                interval.tick().await;
+                let c_files = d_files_clone.load(Ordering::Relaxed);
+                let c_bytes = d_bytes_clone.load(Ordering::Relaxed);
+                let tot_files = t_files_clone.load(Ordering::Relaxed);
+                let tot_bytes = t_bytes_clone.load(Ordering::Relaxed);
+                
+                let _ = app_clone.emit("s3-download-progress", DownloadProgressEvent {
+                    status: "downloading".to_string(),
+                    downloaded_files: c_files,
+                    total_files: tot_files,
+                    downloaded_bytes: c_bytes,
+                    total_bytes: tot_bytes,
+                    current_file: "".to_string(),
+                    error: None,
+                });
+            }
+        });
+
+        // Producer: Paginate S3 objects and send to channel
+        let (tx, rx) = mpsc::channel(10000);
+        let client_clone = client.clone();
+        let bucket_str = bucket.to_string();
+        let prefix_str = prefix.to_string();
+        let t_files_prod = total_files.clone();
+        let t_bytes_prod = total_bytes.clone();
+
+        let scan_task = tokio::spawn(async move {
+            let mut marker = None;
+            loop {
+                let mut req = client_clone.list_objects().bucket(&bucket_str).prefix(&prefix_str);
+                if let Some(m) = marker.clone() {
+                    req = req.marker(m);
+                }
+
+                let resp_result = req.send().await;
+                match resp_result {
+                    Ok(resp) => {
+                        for obj in resp.contents() {
+                            if let Some(obj_key) = obj.key() {
+                                if obj_key.ends_with('/') {
+                                    continue;
+                                }
+                                let size = obj.size().unwrap_or(0) as u64;
+                                t_files_prod.fetch_add(1, Ordering::Relaxed);
+                                t_bytes_prod.fetch_add(size, Ordering::Relaxed);
+                                
+                                if tx.send((obj_key.to_string(), size)).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+
+                        if resp.is_truncated().unwrap_or(false) {
+                            marker = resp.next_marker().map(|s| s.to_string()).or_else(|| {
+                                resp.contents().last().and_then(|obj| obj.key().map(|s| s.to_string()))
+                            });
+                            if marker.is_none() { break; }
+                        } else {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to list objects: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Consumer: Stream downloads
+        let rx_stream = ReceiverStream::new(rx);
+        let stream = rx_stream.map(|(obj_key, size)| {
             let client = client.clone();
-            let app = app.clone();
-            let base_path = base_path.to_path_buf();
+            let base_path = base_path.clone();
             let prefix_str = prefix.to_string();
             let bucket_str = bucket.to_string();
             let downloaded_files = downloaded_files.clone();
             let downloaded_bytes = downloaded_bytes.clone();
+            let has_error = has_error.clone();
 
             async move {
                 let relative_path = if obj_key.starts_with(&prefix_str) {
@@ -918,7 +971,11 @@ impl S3ClientManager {
 
                 if let Some(parent) = local_file_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Err(anyhow::anyhow!("Failed to create dir: {}", e));
+                        let err_msg = format!("Failed to create dir: {}", e);
+                        tracing::error!("{}", err_msg);
+                        let mut errors = has_error.lock().await;
+                        errors.push(err_msg);
+                        return Err(anyhow::anyhow!("Download failed"));
                     }
                 }
 
@@ -930,57 +987,79 @@ impl S3ClientManager {
                     .await;
 
                 match get_resp {
-                    Ok(resp) => {
-                        match resp.body.collect().await {
-                            Ok(data) => {
-                                if let Err(e) = tokio::fs::write(&local_file_path, data.into_bytes()).await {
-                                    return Err(anyhow::anyhow!("Failed to write file: {}", e));
+                    Ok(mut resp) => {
+                        match tokio::fs::File::create(&local_file_path).await {
+                            Ok(mut file) => {
+                                while let Some(bytes_result) = resp.body.next().await {
+                                    match bytes_result {
+                                        Ok(bytes) => {
+                                            if let Err(e) = file.write_all(&bytes).await {
+                                                let err_msg = format!("Failed to write to file {}: {}", local_file_path.display(), e);
+                                                tracing::error!("{}", err_msg);
+                                                let mut errors = has_error.lock().await;
+                                                errors.push(err_msg);
+                                                return Err(anyhow::anyhow!("Download failed"));
+                                            }
+                                            let chunk_len = bytes.len() as u64;
+                                            downloaded_bytes.fetch_add(chunk_len, Ordering::Relaxed);
+                                        }
+                                        Err(e) => {
+                                            let err_msg = format!("Failed to read stream for {}: {}", obj_key, e);
+                                            tracing::error!("{}", err_msg);
+                                            let mut errors = has_error.lock().await;
+                                            errors.push(err_msg);
+                                            return Err(anyhow::anyhow!("Download failed"));
+                                        }
+                                    }
                                 }
+                                downloaded_files.fetch_add(1, Ordering::Relaxed);
+                                Ok(())
                             }
-                            Err(e) => return Err(anyhow::anyhow!("Failed to collect body: {}", e)),
+                            Err(e) => {
+                                let err_msg = format!("Failed to create file {}: {}", local_file_path.display(), e);
+                                tracing::error!("{}", err_msg);
+                                let mut errors = has_error.lock().await;
+                                errors.push(err_msg);
+                                Err(anyhow::anyhow!("Download failed"))
+                            }
                         }
                     }
-                    Err(e) => return Err(anyhow::anyhow!("Failed to get object: {}", e)),
+                    Err(e) => {
+                        let err_msg = format!("Failed to get object {}: {}", obj_key, e);
+                        tracing::error!("{}", err_msg);
+                        let mut errors = has_error.lock().await;
+                        errors.push(err_msg);
+                        Err(anyhow::anyhow!("Download failed"))
+                    }
                 }
-
-                // Update progress
-                let current_d_files = downloaded_files.fetch_add(1, Ordering::SeqCst) + 1;
-                let current_d_bytes = downloaded_bytes.fetch_add(size, Ordering::SeqCst) + size;
-
-                let _ = app.emit("s3-download-progress", DownloadProgressEvent {
-                    status: "downloading".to_string(),
-                    downloaded_files: current_d_files,
-                    total_files,
-                    downloaded_bytes: current_d_bytes,
-                    total_bytes,
-                    current_file: obj_key,
-                    error: None,
-                });
-
-                Ok(())
             }
         });
 
-        // Use buffer_unordered for concurrency (e.g. 5 concurrent downloads)
-        let results: Vec<Result<()>> = stream.buffer_unordered(5).collect().await;
+        // Process up to 20 files concurrently
+        let _: Vec<_> = stream.buffer_unordered(20).collect().await;
 
-        let mut has_error = false;
-        let mut error_messages = Vec::new();
-        for res in results {
-            if let Err(e) = res {
-                has_error = true;
-                let err_str = e.to_string();
-                tracing::error!("Download error: {}", err_str);
-                error_messages.push(err_str);
-            }
+        let _ = scan_task.await;
+
+        is_done.store(true, Ordering::Relaxed);
+        let _ = throttle_task.await;
+
+        let tf = total_files.load(Ordering::Relaxed);
+        let tb = total_bytes.load(Ordering::Relaxed);
+        let df = downloaded_files.load(Ordering::Relaxed);
+        let db = downloaded_bytes.load(Ordering::Relaxed);
+
+        if tf == 0 {
+            emit_progress(&app, "completed", 0, 0, 0, 0, "Folder is empty", None);
+            return Ok(());
         }
 
-        if has_error {
-            let combined_error = error_messages.join("; ");
-            emit_progress(&app, "error", downloaded_files.load(Ordering::SeqCst), total_files, downloaded_bytes.load(Ordering::SeqCst), total_bytes, "", Some(combined_error.clone()));
+        let errors = has_error.lock().await;
+        if !errors.is_empty() {
+            let combined_error = errors.join("; ");
+            emit_progress(&app, "error", df, tf, db, tb, "", Some(combined_error.clone()));
             return Err(anyhow::anyhow!("Download folder completed with errors: {}", combined_error));
         } else {
-            emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Download completed successfully", None);
+            emit_progress(&app, "completed", tf, tf, tb, tb, "Download completed successfully", None);
         }
 
         Ok(())
@@ -996,7 +1075,10 @@ impl S3ClientManager {
     ) -> Result<()> {
         use tauri::Emitter;
         use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+        use std::sync::Arc;
         use futures::stream::{self, StreamExt};
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
 
         let client = self.get_client(id).await?;
         let base_path = std::path::Path::new(local_dir);
@@ -1020,12 +1102,6 @@ impl S3ClientManager {
         let mut total_bytes = 0;
         let mut total_files = 0;
 
-        for key in &keys {
-            // we can use head_object to get size, or just fetch directly. 
-            // Since head_object is sequential here, we'll try concurrent head_object
-        }
-        
-        // Concurrent head_object
         let head_stream = stream::iter(keys.clone().into_iter()).map(|key| {
             let client = client.clone();
             let bucket_str = bucket.to_string();
@@ -1033,7 +1109,7 @@ impl S3ClientManager {
                 let resp = client.head_object().bucket(&bucket_str).key(&key).send().await;
                 match resp {
                     Ok(r) => Ok((key, r.content_length().unwrap_or(0) as u64)),
-                    Err(_) => Ok((key, 0)), // fallback
+                    Err(_) => Ok((key, 0)),
                 }
             }
         });
@@ -1047,29 +1123,59 @@ impl S3ClientManager {
             }
         }
 
-        // Emit ready to download
         emit_progress(&app, "downloading", 0, total_files, 0, total_bytes, "Starting batch download...", None);
 
         // Phase 2: Concurrent Download
         let downloaded_files = Arc::new(AtomicU32::new(0));
         let downloaded_bytes = Arc::new(AtomicU64::new(0));
 
+        let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let is_done_clone = is_done.clone();
+        let app_clone = app.clone();
+        
+        let d_files_clone = downloaded_files.clone();
+        let d_bytes_clone = downloaded_bytes.clone();
+
+        let throttle_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            while !is_done_clone.load(Ordering::Relaxed) {
+                interval.tick().await;
+                let c_files = d_files_clone.load(Ordering::Relaxed);
+                let c_bytes = d_bytes_clone.load(Ordering::Relaxed);
+                
+                let _ = app_clone.emit("s3-download-progress", DownloadProgressEvent {
+                    status: "downloading".to_string(),
+                    downloaded_files: c_files,
+                    total_files,
+                    downloaded_bytes: c_bytes,
+                    total_bytes,
+                    current_file: "".to_string(),
+                    error: None,
+                });
+            }
+        });
+
+        let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
         let stream = stream::iter(all_objects.into_iter()).map(|(obj_key, size)| {
             let client = client.clone();
-            let app = app.clone();
             let base_path = base_path.to_path_buf();
             let bucket_str = bucket.to_string();
             let downloaded_files = downloaded_files.clone();
             let downloaded_bytes = downloaded_bytes.clone();
+            let has_error = has_error.clone();
 
             async move {
-                // Get the base name of the file for saving in the local_dir directly
                 let file_name = std::path::Path::new(&obj_key).file_name().unwrap_or_default();
                 let local_file_path = base_path.join(file_name);
 
                 if let Some(parent) = local_file_path.parent() {
                     if let Err(e) = tokio::fs::create_dir_all(parent).await {
-                        return Err(anyhow::anyhow!("Failed to create dir: {}", e));
+                        let err_msg = format!("Failed to create dir: {}", e);
+                        tracing::error!("{}", err_msg);
+                        let mut errors = has_error.lock().await;
+                        errors.push(err_msg);
+                        return Err(anyhow::anyhow!("Download failed"));
                     }
                 }
 
@@ -1081,54 +1187,64 @@ impl S3ClientManager {
                     .await;
 
                 match get_resp {
-                    Ok(resp) => {
-                        match resp.body.collect().await {
-                            Ok(data) => {
-                                if let Err(e) = tokio::fs::write(&local_file_path, data.into_bytes()).await {
-                                    return Err(anyhow::anyhow!("Failed to write file: {}", e));
+                    Ok(mut resp) => {
+                        match tokio::fs::File::create(&local_file_path).await {
+                            Ok(mut file) => {
+                                while let Some(bytes_result) = resp.body.next().await {
+                                    match bytes_result {
+                                        Ok(bytes) => {
+                                            if let Err(e) = file.write_all(&bytes).await {
+                                                let err_msg = format!("Failed to write file {}: {}", local_file_path.display(), e);
+                                                tracing::error!("{}", err_msg);
+                                                let mut errors = has_error.lock().await;
+                                                errors.push(err_msg);
+                                                return Err(anyhow::anyhow!("Download failed"));
+                                            }
+                                            let chunk_len = bytes.len() as u64;
+                                            downloaded_bytes.fetch_add(chunk_len, Ordering::Relaxed);
+                                        }
+                                        Err(e) => {
+                                            let err_msg = format!("Failed to read stream for {}: {}", obj_key, e);
+                                            tracing::error!("{}", err_msg);
+                                            let mut errors = has_error.lock().await;
+                                            errors.push(err_msg);
+                                            return Err(anyhow::anyhow!("Download failed"));
+                                        }
+                                    }
                                 }
+                                downloaded_files.fetch_add(1, Ordering::Relaxed);
+                                Ok(())
                             }
-                            Err(e) => return Err(anyhow::anyhow!("Failed to collect body: {}", e)),
+                            Err(e) => {
+                                let err_msg = format!("Failed to create file {}: {}", local_file_path.display(), e);
+                                tracing::error!("{}", err_msg);
+                                let mut errors = has_error.lock().await;
+                                errors.push(err_msg);
+                                Err(anyhow::anyhow!("Download failed"))
+                            }
                         }
                     }
-                    Err(e) => return Err(anyhow::anyhow!("Failed to get object: {}", e)),
+                    Err(e) => {
+                        let err_msg = format!("Failed to get object {}: {}", obj_key, e);
+                        tracing::error!("{}", err_msg);
+                        let mut errors = has_error.lock().await;
+                        errors.push(err_msg);
+                        Err(anyhow::anyhow!("Download failed"))
+                    }
                 }
-
-                // Update progress
-                let current_d_files = downloaded_files.fetch_add(1, Ordering::SeqCst) + 1;
-                let current_d_bytes = downloaded_bytes.fetch_add(size, Ordering::SeqCst) + size;
-
-                let _ = app.emit("s3-download-progress", DownloadProgressEvent {
-                    status: "downloading".to_string(),
-                    downloaded_files: current_d_files,
-                    total_files,
-                    downloaded_bytes: current_d_bytes,
-                    total_bytes,
-                    current_file: obj_key,
-                    error: None,
-                });
-
-                Ok(())
             }
         });
 
         // Use buffer_unordered for concurrency (e.g. 10 concurrent downloads)
-        let results: Vec<Result<()>> = stream.buffer_unordered(10).collect().await;
+        let _: Vec<_> = stream.buffer_unordered(10).collect().await;
 
-        let mut has_error = false;
-        let mut error_messages = Vec::new();
-        for res in results {
-            if let Err(e) = res {
-                has_error = true;
-                let err_str = e.to_string();
-                tracing::error!("Download error: {}", err_str);
-                error_messages.push(err_str);
-            }
-        }
+        is_done.store(true, Ordering::Relaxed);
+        let _ = throttle_task.await;
 
-        if has_error {
-            let combined_error = error_messages.join("; ");
-            emit_progress(&app, "error", downloaded_files.load(Ordering::SeqCst), total_files, downloaded_bytes.load(Ordering::SeqCst), total_bytes, "", Some(combined_error.clone()));
+        let errors = has_error.lock().await;
+        if !errors.is_empty() {
+            let combined_error = errors.join("; ");
+            emit_progress(&app, "error", downloaded_files.load(Ordering::Relaxed), total_files, downloaded_bytes.load(Ordering::Relaxed), total_bytes, "", Some(combined_error.clone()));
             return Err(anyhow::anyhow!("Batch download completed with errors: {}", combined_error));
         } else {
             emit_progress(&app, "completed", total_files, total_files, total_bytes, total_bytes, "Batch download completed successfully", None);

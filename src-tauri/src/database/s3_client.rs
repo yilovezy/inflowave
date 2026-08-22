@@ -1374,19 +1374,19 @@ impl S3ClientManager {
                 };
 
                 let mut retry_count = 0;
+                let mut batch_success = false;
                 loop {
                     match client.delete_objects().bucket(&bucket_str).delete(delete_req.clone()).send().await {
                         Ok(resp) => {
                             let deleted_count = resp.deleted().len() as u32;
                             total_deleted.fetch_add(deleted_count, Ordering::Relaxed);
+                            batch_success = true;
                             break;
                         }
                         Err(e) => {
                             retry_count += 1;
                             if retry_count >= 3 {
-                                tracing::error!("Batch delete failed after 3 retries: {}", e);
-                                let mut errors = has_error.lock().await;
-                                errors.push(format!("Batch delete failed: {}", e));
+                                tracing::warn!("Batch delete failed after 3 retries: {}, falling back to sequential delete", e);
                                 break;
                             } else {
                                 tracing::warn!("Batch delete failed: {}, retrying {}/3...", e, retry_count);
@@ -1395,12 +1395,43 @@ impl S3ClientManager {
                         }
                     }
                 }
+
+                if !batch_success {
+                    // Fallback: Delete objects individually (using 20 concurrent tasks)
+                    let fallback_stream = futures::stream::iter(chunk).map(|k| {
+                        let client = client.clone();
+                        let bucket_str = bucket_str.clone();
+                        async move {
+                            match client.delete_object().bucket(&bucket_str).key(&k).send().await {
+                                Ok(_) => Ok(()),
+                                Err(e) => Err((k, e)),
+                            }
+                        }
+                    });
+
+                    let fallback_results: Vec<_> = fallback_stream.buffer_unordered(20).collect().await;
+                    let mut fallback_errors = Vec::new();
+                    let mut fallback_deleted = 0;
+
+                    for res in fallback_results {
+                        match res {
+                            Ok(_) => fallback_deleted += 1,
+                            Err((k, e)) => fallback_errors.push(format!("{}: {}", k, e)),
+                        }
+                    }
+
+                    total_deleted.fetch_add(fallback_deleted, Ordering::Relaxed);
+
+                    if !fallback_errors.is_empty() {
+                        let mut errors = has_error.lock().await;
+                        errors.push(format!("Fallback delete failed for some objects: {}", fallback_errors.join("; ")));
+                    }
+                }
             }
         });
 
-        // Concurrency level for deleting chunks of 1000 items
-        // Reduced to 1 to match the original sequential batch behavior and prevent "dispatch failure" from overwhelming the network/server
-        let _: Vec<_> = stream.buffer_unordered(1).collect().await;
+        // Concurrency level for processing chunks
+        let _: Vec<_> = stream.buffer_unordered(2).collect().await;
 
         let _ = scan_task.await;
 

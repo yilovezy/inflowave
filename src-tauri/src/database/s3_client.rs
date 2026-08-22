@@ -1373,22 +1373,34 @@ impl S3ClientManager {
                     }
                 };
 
-                match client.delete_objects().bucket(&bucket_str).delete(delete_req).send().await {
-                    Ok(resp) => {
-                        let deleted_count = resp.deleted().len() as u32;
-                        total_deleted.fetch_add(deleted_count, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        tracing::error!("Batch delete failed: {}", e);
-                        let mut errors = has_error.lock().await;
-                        errors.push(format!("Batch delete failed: {}", e));
+                let mut retry_count = 0;
+                loop {
+                    match client.delete_objects().bucket(&bucket_str).delete(delete_req.clone()).send().await {
+                        Ok(resp) => {
+                            let deleted_count = resp.deleted().len() as u32;
+                            total_deleted.fetch_add(deleted_count, Ordering::Relaxed);
+                            break;
+                        }
+                        Err(e) => {
+                            retry_count += 1;
+                            if retry_count >= 3 {
+                                tracing::error!("Batch delete failed after 3 retries: {}", e);
+                                let mut errors = has_error.lock().await;
+                                errors.push(format!("Batch delete failed: {}", e));
+                                break;
+                            } else {
+                                tracing::warn!("Batch delete failed: {}, retrying {}/3...", e, retry_count);
+                                tokio::time::sleep(std::time::Duration::from_millis(500 * retry_count)).await;
+                            }
+                        }
                     }
                 }
             }
         });
 
         // Concurrency level for deleting chunks of 1000 items
-        let _: Vec<_> = stream.buffer_unordered(5).collect().await;
+        // Reduced to 1 to match the original sequential batch behavior and prevent "dispatch failure" from overwhelming the network/server
+        let _: Vec<_> = stream.buffer_unordered(1).collect().await;
 
         let _ = scan_task.await;
 

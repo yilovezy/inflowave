@@ -109,7 +109,7 @@ sudo xattr -r -d com.apple.quarantine /Applications/Inflowave.app
 - 📥 **[InflowWave_0.9.4_amd64.deb](https://github.com/chenqi92/inflowave/releases/download/v0.9.5-2/InflowWave_0.9.4_amd64.deb)**
   - ✅ Ubuntu 18.04+, Debian 10+
   - ✅ 系统集成度高，支持自动更新
-  - 📋 安装命令: `sudo dpkg -i InflowWave_0.9.5-11-10-9-8-7-6-5-4-3-2_amd64.deb`
+  - 📋 安装命令: `sudo dpkg -i InflowWave_0.9.6-11-10-9-8-7-6-5-4-3-2_amd64.deb`
   - 🔧 依赖修复: `sudo apt-get install -f`
 
 **通用 Linux (万能选择)**
@@ -117,13 +117,13 @@ sudo xattr -r -d com.apple.quarantine /Applications/Inflowave.app
   - ✅ 适用于大部分 x64 Linux 发行版
   - ✅ 免安装，下载后直接运行
   - ✅ 便携版，不影响系统
-  - 📋 使用方法: `chmod +x InflowWave_0.9.5-11-10-9-8-7-6-5-4-3-2_amd64.AppImage && ./InflowWave_0.9.4_amd64.AppImage`
+  - 📋 使用方法: `chmod +x InflowWave_0.9.6-11-10-9-8-7-6-5-4-3-2_amd64.AppImage && ./InflowWave_0.9.4_amd64.AppImage`
 
 **RPM 系列 (CentOS/RHEL/Fedora)**
 - 📥 **[InflowWave-0.9.4-1.x86_64.rpm](https://github.com/chenqi92/inflowave/releases/download/v0.9.5-2/InflowWave-0.9.4-1.x86_64.rpm)**
   - ✅ CentOS 7+, RHEL 7+, Fedora 30+
-  - 📋 安装命令: `sudo rpm -i InflowWave-0.9.5-11-10-9-8-7-6-5-4-3-2-1.x86_64.rpm`
-  - 📋 或使用: `sudo dnf install InflowWave-0.9.5-11-10-9-8-7-6-5-4-3-2-1.x86_64.rpm`
+  - 📋 安装命令: `sudo rpm -i InflowWave-0.9.6-11-10-9-8-7-6-5-4-3-2-1.x86_64.rpm`
+  - 📋 或使用: `sudo dnf install InflowWave-0.9.6-11-10-9-8-7-6-5-4-3-2-1.x86_64.rpm`
 
 ### ⚠️ 系统要求
 

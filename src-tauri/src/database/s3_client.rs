@@ -591,9 +591,10 @@ impl S3ClientManager {
         size: u64,
         content_type: Option<String>,
     ) -> Result<()> {
+        let multipart_threshold: u64 = 1024 * 1024 * 1024; // 1GB threshold
         let chunk_size: u64 = 50 * 1024 * 1024; // 50MB chunks
         
-        if size <= chunk_size {
+        if size <= multipart_threshold {
             // standard PutObject
             let body = aws_sdk_s3::primitives::ByteStream::from_path(local_path)
                 .await
@@ -624,27 +625,36 @@ impl S3ClientManager {
             let multipart_upload = create_req.send().await?;
             let upload_id = multipart_upload.upload_id().ok_or_else(|| anyhow::anyhow!("No upload_id returned"))?.to_string();
 
-            let mut parts = Vec::new();
+            // Prepare chunk definitions
+            let mut chunk_defs = Vec::new();
             let mut offset = 0;
             let mut part_number = 1;
-            
-            let mut upload_tasks = Vec::new();
-
             while offset < size {
                 let length = std::cmp::min(chunk_size, size - offset);
-                
-                let client_clone = client.clone();
-                let bucket_str = bucket.to_string();
-                let key_str = key.to_string();
-                let uid = upload_id.clone();
-                let p_num = part_number;
-                let local_path_buf = local_path.to_path_buf();
+                chunk_defs.push((offset, length, part_number));
+                offset += length;
+                part_number += 1;
+            }
 
-                let task = tokio::spawn(async move {
+            let uid = upload_id.clone();
+            let bucket_str = bucket.to_string();
+            let key_str = key.to_string();
+            let local_path_buf = local_path.to_path_buf();
+            
+            // Create a stream of chunks to upload with limited concurrency
+            use futures::stream::{self, StreamExt};
+            let chunk_stream = stream::iter(chunk_defs).map(|(offset, length, p_num)| {
+                let client_clone = client.clone();
+                let b_str = bucket_str.clone();
+                let k_str = key_str.clone();
+                let u_id = uid.clone();
+                let l_path = local_path_buf.clone();
+                
+                async move {
                     let mut retry = 0;
                     loop {
                         let body = match aws_sdk_s3::primitives::ByteStream::read_from()
-                            .path(&local_path_buf)
+                            .path(&l_path)
                             .offset(offset)
                             .length(aws_sdk_s3::primitives::Length::Exact(length))
                             .build()
@@ -654,9 +664,9 @@ impl S3ClientManager {
                             };
 
                         match client_clone.upload_part()
-                            .bucket(&bucket_str)
-                            .key(&key_str)
-                            .upload_id(&uid)
+                            .bucket(&b_str)
+                            .key(&k_str)
+                            .upload_id(&u_id)
                             .part_number(p_num)
                             .body(body)
                             .send().await {
@@ -676,23 +686,19 @@ impl S3ClientManager {
                             }
                         }
                     }
-                });
+                }
+            });
 
-                upload_tasks.push(task);
-                offset += length;
-                part_number += 1;
-            }
+            // Concurrency limit for chunks: 4 concurrent parts per file
+            let results: Vec<Result<aws_sdk_s3::types::CompletedPart, anyhow::Error>> = chunk_stream.buffer_unordered(4).collect().await;
 
-            for task in upload_tasks {
-                match task.await {
-                    Ok(Ok(part)) => parts.push(part),
-                    Ok(Err(e)) => {
-                        let _ = client.abort_multipart_upload().bucket(bucket).key(key).upload_id(&upload_id).send().await;
-                        return Err(e);
-                    }
+            let mut parts = Vec::new();
+            for res in results {
+                match res {
+                    Ok(part) => parts.push(part),
                     Err(e) => {
                         let _ = client.abort_multipart_upload().bucket(bucket).key(key).upload_id(&upload_id).send().await;
-                        return Err(anyhow::anyhow!("Task failed: {}", e));
+                        return Err(e);
                     }
                 }
             }

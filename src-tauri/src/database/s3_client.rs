@@ -84,6 +84,15 @@ pub struct UploadProgressEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProgressEvent {
+    pub status: String, // "scanning", "deleting", "completed", "error"
+    pub deleted_files: u32,
+    pub total_files: u32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3PresignedUrlResult {
     pub url: String,
     pub expires_at: ChronoDateTime<Utc>,
@@ -574,6 +583,138 @@ impl S3ClientManager {
         Ok(())
     }
 
+    async fn upload_file_internal(
+        client: &aws_sdk_s3::Client,
+        bucket: &str,
+        key: &str,
+        local_path: &std::path::Path,
+        size: u64,
+        content_type: Option<String>,
+    ) -> Result<()> {
+        let chunk_size: u64 = 50 * 1024 * 1024; // 50MB chunks
+        
+        if size <= chunk_size {
+            // standard PutObject
+            let body = aws_sdk_s3::primitives::ByteStream::from_path(local_path)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to read file {}: {}", local_path.display(), e))?;
+
+            let mut request = client
+                .put_object()
+                .bucket(bucket)
+                .key(key)
+                .body(body);
+                
+            if let Some(ct) = content_type {
+                request = request.content_type(ct);
+            }
+
+            request.send().await?;
+        } else {
+            // Multipart upload
+            let mut create_req = client
+                .create_multipart_upload()
+                .bucket(bucket)
+                .key(key);
+                
+            if let Some(ct) = content_type {
+                create_req = create_req.content_type(ct);
+            }
+            
+            let multipart_upload = create_req.send().await?;
+            let upload_id = multipart_upload.upload_id().ok_or_else(|| anyhow::anyhow!("No upload_id returned"))?.to_string();
+
+            let mut parts = Vec::new();
+            let mut offset = 0;
+            let mut part_number = 1;
+            
+            let mut upload_tasks = Vec::new();
+
+            while offset < size {
+                let length = std::cmp::min(chunk_size, size - offset);
+                
+                let client_clone = client.clone();
+                let bucket_str = bucket.to_string();
+                let key_str = key.to_string();
+                let uid = upload_id.clone();
+                let p_num = part_number;
+                let local_path_buf = local_path.to_path_buf();
+
+                let task = tokio::spawn(async move {
+                    let mut retry = 0;
+                    loop {
+                        let body = match aws_sdk_s3::primitives::ByteStream::read_from()
+                            .path(&local_path_buf)
+                            .offset(offset)
+                            .length(aws_sdk_s3::primitives::Length::Exact(length))
+                            .build()
+                            .await {
+                                Ok(b) => b,
+                                Err(e) => return Err(anyhow::anyhow!("Failed to build body: {}", e))
+                            };
+
+                        match client_clone.upload_part()
+                            .bucket(&bucket_str)
+                            .key(&key_str)
+                            .upload_id(&uid)
+                            .part_number(p_num)
+                            .body(body)
+                            .send().await {
+                            Ok(resp) => {
+                                let etag = resp.e_tag().unwrap_or("").to_string();
+                                return Ok(aws_sdk_s3::types::CompletedPart::builder()
+                                    .part_number(p_num)
+                                    .e_tag(etag)
+                                    .build());
+                            }
+                            Err(e) => {
+                                retry += 1;
+                                if retry >= 3 {
+                                    return Err(anyhow::anyhow!("Failed to upload part {}: {}", p_num, e));
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(500 * retry)).await;
+                            }
+                        }
+                    }
+                });
+
+                upload_tasks.push(task);
+                offset += length;
+                part_number += 1;
+            }
+
+            for task in upload_tasks {
+                match task.await {
+                    Ok(Ok(part)) => parts.push(part),
+                    Ok(Err(e)) => {
+                        let _ = client.abort_multipart_upload().bucket(bucket).key(key).upload_id(&upload_id).send().await;
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        let _ = client.abort_multipart_upload().bucket(bucket).key(key).upload_id(&upload_id).send().await;
+                        return Err(anyhow::anyhow!("Task failed: {}", e));
+                    }
+                }
+            }
+            
+            // AWS requires parts to be sorted by part_number
+            parts.sort_by_key(|p| p.part_number().unwrap_or(0));
+
+            let completed_multipart_upload = aws_sdk_s3::types::CompletedMultipartUpload::builder()
+                .set_parts(Some(parts))
+                .build();
+
+            client.complete_multipart_upload()
+                .bucket(bucket)
+                .key(key)
+                .upload_id(&upload_id)
+                .multipart_upload(completed_multipart_upload)
+                .send().await?;
+        }
+        
+        Ok(())
+    }
+
     pub async fn upload_file_stream(
         &self,
         id: &str,
@@ -583,29 +724,15 @@ impl S3ClientManager {
         content_type: Option<String>,
     ) -> Result<()> {
         let client = self.get_client(id).await?;
+        
+        let path = std::path::Path::new(file_path);
+        let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+        
+        let ct = content_type.or_else(|| {
+            mime_guess::from_path(key).first().map(|m| m.to_string())
+        });
 
-        let body = ByteStream::from_path(std::path::Path::new(file_path))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read file stream from {}: {}", file_path, e))?;
-
-        let mut request = client
-            .put_object()
-            .bucket(bucket)
-            .key(key)
-            .body(body);
-
-        // 设置Content-Type
-        if let Some(ct) = content_type {
-            request = request.content_type(ct);
-        } else {
-            // 尝试从文件扩展名猜测MIME类型
-            if let Some(mime) = mime_guess::from_path(key).first() {
-                request = request.content_type(mime.to_string());
-            }
-        }
-
-        request.send().await?;
-        Ok(())
+        Self::upload_file_internal(&client, bucket, key, path, size, ct).await
     }
 
     pub async fn upload_folder(
@@ -736,47 +863,27 @@ impl S3ClientManager {
                     format!("{}{}/{}", prefix_str, f_name, relative_path)
                 };
 
-                let body_result = aws_sdk_s3::primitives::ByteStream::from_path(&local_path).await;
-                match body_result {
-                    Ok(body) => {
-                        let mut request = client
-                            .put_object()
-                            .bucket(&bucket_str)
-                            .key(&object_key)
-                            .body(body);
-                            
-                        if let Some(mime) = mime_guess::from_path(&local_path).first() {
-                            request = request.content_type(mime.to_string());
-                        }
+                let ct = mime_guess::from_path(&local_path).first().map(|m| m.to_string());
 
-                        match request.send().await {
-                            Ok(_) => {
-                                uploaded_files.fetch_add(1, Ordering::Relaxed);
-                                uploaded_bytes.fetch_add(size, Ordering::Relaxed);
-                                Ok(())
-                            }
-                            Err(e) => {
-                                let err_msg = format!("Failed to upload {}: {}", object_key, e);
-                                tracing::error!("{}", err_msg);
-                                let mut errors = has_error.lock().await;
-                                errors.push(err_msg);
-                                Err(anyhow::anyhow!("Upload failed"))
-                            }
-                        }
+                match Self::upload_file_internal(&client, &bucket_str, &object_key, &local_path, size, ct).await {
+                    Ok(_) => {
+                        uploaded_files.fetch_add(1, Ordering::Relaxed);
+                        uploaded_bytes.fetch_add(size, Ordering::Relaxed);
+                        Ok(())
                     }
                     Err(e) => {
-                        let err_msg = format!("Failed to read file {}: {}", local_path.display(), e);
+                        let err_msg = format!("Failed to upload {}: {}", object_key, e);
                         tracing::error!("{}", err_msg);
                         let mut errors = has_error.lock().await;
                         errors.push(err_msg);
-                        Err(anyhow::anyhow!("Read failed"))
+                        Err(anyhow::anyhow!("Upload failed"))
                     }
                 }
             }
         });
 
-        // Process up to 20 files concurrently
-        let _: Vec<_> = stream.buffer_unordered(20).collect().await;
+        // Process up to 5 files concurrently (reduced from 20 due to potential multipart overhead)
+        let _: Vec<_> = stream.buffer_unordered(5).collect().await;
 
         // Wait for scan to complete just in case
         let _ = scan_task.await;
@@ -1276,21 +1383,59 @@ impl S3ClientManager {
         id: &str,
         bucket: &str,
         keys: Vec<String>,
+        app: tauri::AppHandle,
     ) -> Result<u32> {
-        use std::sync::atomic::{AtomicU32, Ordering};
+        use tauri::Emitter;
+        use std::sync::atomic::{AtomicU32, AtomicBool, Ordering};
         use std::sync::Arc;
         use futures::stream::{self, StreamExt};
         use tokio::sync::mpsc;
         use tokio_stream::wrappers::ReceiverStream;
+        use std::time::Duration;
 
         let client = self.get_client(id).await?;
         let total_deleted = Arc::new(AtomicU32::new(0));
+        let total_files = Arc::new(AtomicU32::new(0));
         let has_error = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let emit_progress = |app: &tauri::AppHandle, status: &str, d_files: u32, t_files: u32, err: Option<String>| {
+            let _ = app.emit("s3-delete-progress", DeleteProgressEvent {
+                status: status.to_string(),
+                deleted_files: d_files,
+                total_files: t_files,
+                error: err,
+            });
+        };
+
+        emit_progress(&app, "scanning", 0, 0, None);
+
+        let is_done = Arc::new(AtomicBool::new(false));
+        let is_done_clone = is_done.clone();
+        let app_clone = app.clone();
+        let t_files_clone = total_files.clone();
+        let d_files_clone = total_deleted.clone();
+
+        let throttle_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_millis(100));
+            while !is_done_clone.load(Ordering::Relaxed) {
+                interval.tick().await;
+                let c_files = d_files_clone.load(Ordering::Relaxed);
+                let tot_files = t_files_clone.load(Ordering::Relaxed);
+                
+                let _ = app_clone.emit("s3-delete-progress", DeleteProgressEvent {
+                    status: "deleting".to_string(),
+                    deleted_files: c_files,
+                    total_files: tot_files,
+                    error: None,
+                });
+            }
+        });
 
         // Producer: paginate through keys, expand folders, and push chunks of up to 1000
         let (tx, rx) = mpsc::channel::<Vec<String>>(100);
         let client_clone = client.clone();
         let bucket_str = bucket.to_string();
+        let t_files_prod = total_files.clone();
 
         let scan_task = tokio::spawn(async move {
             let mut current_chunk = Vec::with_capacity(1000);
@@ -1308,6 +1453,7 @@ impl S3ClientManager {
                             Ok(resp) => {
                                 for obj in resp.contents() {
                                     if let Some(obj_key) = obj.key() {
+                                        t_files_prod.fetch_add(1, Ordering::Relaxed);
                                         current_chunk.push(obj_key.to_string());
                                         if current_chunk.len() == 1000 {
                                             let chunk_to_send = std::mem::replace(&mut current_chunk, Vec::with_capacity(1000));
@@ -1332,6 +1478,7 @@ impl S3ClientManager {
                         }
                     }
                 } else {
+                    t_files_prod.fetch_add(1, Ordering::Relaxed);
                     current_chunk.push(key);
                     if current_chunk.len() == 1000 {
                         let chunk_to_send = std::mem::replace(&mut current_chunk, Vec::with_capacity(1000));
@@ -1435,12 +1582,22 @@ impl S3ClientManager {
 
         let _ = scan_task.await;
 
+        is_done.store(true, Ordering::Relaxed);
+        let _ = throttle_task.await;
+
+        let tf = total_files.load(Ordering::Relaxed);
+        let df = total_deleted.load(Ordering::Relaxed);
+
         let errors = has_error.lock().await;
         if !errors.is_empty() {
-            return Err(anyhow::anyhow!("Delete objects completed with errors: {}", errors.join("; ")));
+            let combined_error = errors.join("; ");
+            emit_progress(&app, "error", df, tf, Some(combined_error.clone()));
+            return Err(anyhow::anyhow!("Delete objects completed with errors: {}", combined_error));
         }
 
-        Ok(total_deleted.load(Ordering::Relaxed))
+        emit_progress(&app, "completed", df, tf, None);
+
+        Ok(df)
     }
 
     pub async fn copy_object(

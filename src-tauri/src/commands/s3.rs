@@ -352,10 +352,11 @@ pub async fn s3_delete_object(
 pub async fn s3_delete_objects(
     request: S3DeleteRequest,
     s3_manager: State<'_, Arc<S3ClientManager>>,
+    app_handle: tauri::AppHandle,
 ) -> Result<u32, String> {
 
     s3_manager
-        .delete_objects(&request.connection_id, &request.bucket, request.keys)
+        .delete_objects(&request.connection_id, &request.bucket, request.keys, app_handle)
         .await
         .map_err(|e| e.to_string())
 }

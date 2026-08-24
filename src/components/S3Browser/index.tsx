@@ -148,7 +148,7 @@ interface DownloadProgressEvent {
 }
 
 interface UploadProgressEvent {
-  status: string;
+  status: 'scanning' | 'uploading' | 'completed' | 'error';
   uploadedFiles: number;
   totalFiles: number;
   uploadedBytes: number;
@@ -157,6 +157,12 @@ interface UploadProgressEvent {
   error?: string;
 }
 
+interface DeleteProgressEvent {
+  status: 'scanning' | 'deleting' | 'completed' | 'error';
+  deletedFiles: number;
+  totalFiles: number;
+  error?: string;
+}
 export interface S3BrowserProps {
   connectionId: string;
   connectionName?: string;
@@ -268,6 +274,10 @@ const S3Browser: React.FC<S3BrowserProps> = ({
   const [uploadProgress, setUploadProgress] = useState<UploadProgressEvent | null>(null);
   const [showUploadProgress, setShowUploadProgress] = useState(false);
 
+  // 删除进度状态
+  const [deleteProgress, setDeleteProgress] = useState<DeleteProgressEvent | null>(null);
+  const [showDeleteProgress, setShowDeleteProgress] = useState(false);
+
   // 监听下载进度事件
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -332,6 +342,36 @@ const S3Browser: React.FC<S3BrowserProps> = ({
       if (unlisten) unlisten();
     };
   }, [t]);
+
+  // 监听删除进度事件
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    
+    const setupListener = async () => {
+      try {
+        unlisten = await listen<DeleteProgressEvent>('s3-delete-progress', (event) => {
+          setDeleteProgress(event.payload);
+          setShowDeleteProgress(true);
+          
+          if (event.payload.status === 'completed' || event.payload.status === 'error') {
+            if (event.payload.status === 'error') {
+              showMessage.error(event.payload.error || '删除失败');
+            } else if (event.payload.status === 'completed') {
+              showMessage.success(`成功删除，包含 ${event.payload.totalFiles} 个文件`);
+            }
+          }
+        });
+      } catch (error) {
+        logger.error('Failed to listen for S3 delete progress:', error);
+      }
+    };
+    
+    setupListener();
+    
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
   const [previewProgress, setPreviewProgress] = useState<string>('');
   const [showShareInPreview, setShowShareInPreview] = useState(false);
   const [currentTempFile, setCurrentTempFile] = useState<string | null>(null);
@@ -4674,6 +4714,76 @@ const S3Browser: React.FC<S3BrowserProps> = ({
           <DialogFooter>
             {(uploadProgress?.status === 'completed' || uploadProgress?.status === 'error') && (
               <Button onClick={() => setShowUploadProgress(false)}>
+                关闭
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除进度对话框 */}
+      <Dialog open={showDeleteProgress} onOpenChange={(open) => {
+        if (!open && (!deleteProgress || deleteProgress.status === 'completed' || deleteProgress.status === 'error')) {
+          setShowDeleteProgress(false);
+        }
+      }}>
+        <DialogContent className="sm:max-w-[425px]" hideCloseButton={deleteProgress?.status === 'scanning' || deleteProgress?.status === 'deleting'}>
+          <DialogHeader>
+            <DialogTitle>
+              {deleteProgress?.status === 'scanning' && '扫描文件夹...'}
+              {deleteProgress?.status === 'deleting' && '正在删除...'}
+              {deleteProgress?.status === 'completed' && '删除完成'}
+              {deleteProgress?.status === 'error' && '删除出错'}
+            </DialogTitle>
+            <DialogDescription>
+              {deleteProgress?.status === 'scanning' && '正在扫描需要删除的文件，计算总数，请稍候...'}
+              {deleteProgress?.status === 'deleting' && '正在通过并发引擎批量删除文件。'}
+              {deleteProgress?.status === 'completed' && '所有文件已成功删除。'}
+              {deleteProgress?.status === 'error' && '部分或全部文件删除失败。'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteProgress && (
+            <div className="py-4 w-full overflow-hidden">
+              <div className="space-y-4 w-full">
+                {/* 文件数量进度 */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-sm font-medium">
+                    <span>文件数量</span>
+                    <span>
+                      {deleteProgress.status === 'scanning' 
+                        ? `已发现: ${deleteProgress.totalFiles}` 
+                        : `${deleteProgress.deletedFiles} / ${deleteProgress.totalFiles}`
+                      }
+                    </span>
+                  </div>
+                  {deleteProgress.status !== 'scanning' && (
+                    <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-2 rounded-full ${deleteProgress.status === 'error' ? 'bg-destructive' : 'bg-primary'}`}
+                        style={{
+                          width: deleteProgress.totalFiles > 0 
+                            ? `${Math.min((deleteProgress.deletedFiles / deleteProgress.totalFiles) * 100, 100)}%` 
+                            : '0%'
+                        }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 错误信息 */}
+                {deleteProgress.status === 'error' && deleteProgress.error && (
+                  <div className="text-xs text-destructive bg-destructive/10 p-2 rounded max-h-24 overflow-y-auto">
+                    {deleteProgress.error}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            {(deleteProgress?.status === 'completed' || deleteProgress?.status === 'error') && (
+              <Button onClick={() => setShowDeleteProgress(false)}>
                 关闭
               </Button>
             )}

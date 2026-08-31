@@ -216,7 +216,7 @@ export const PageLoading: React.FC<PageLoadingProps> = ({
   return (
     <div
       className={cn(
-        'min-h-screen flex items-center justify-center bg-background',
+        'h-full flex items-center justify-center bg-background',
         className
       )}
     >

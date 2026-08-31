@@ -1,0 +1,44 @@
+/* ==========================================================================
+   Safari 13 (macOS 10.15 Catalina) CSS compatibility fixes.
+   Requires safari13-compat.js to add `safari13` class to <html>.
+   ========================================================================== */
+
+/* INSET PROPERTY FALLBACK
+   Safari 13 doesn't support `inset` shorthand (Safari 14.1+).
+   Tailwind's inset-0/inset-x-0/inset-y-0 generate `inset:` which is ignored. */
+html.safari13 .inset-0,
+html.safari13 [class*="inset-0"] {
+  top: 0px !important;
+  right: 0px !important;
+  bottom: 0px !important;
+  left: 0px !important;
+}
+
+html.safari13 .inset-x-0,
+html.safari13 [class*="inset-x-0"] {
+  right: 0px !important;
+  left: 0px !important;
+}
+
+html.safari13 .inset-y-0,
+html.safari13 [class*="inset-y-0"] {
+  top: 0px !important;
+  bottom: 0px !important;
+}
+
+html.safari13 .inset-auto,
+html.safari13 [class*="inset-auto"] {
+  top: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: auto !important;
+}
+
+html.safari13 .inset-full,
+html.safari13 [class*="inset-full"] {
+  top: 100% !important;
+  right: 100% !important;
+  bottom: 100% !important;
+  left: 100% !important;
+}
+

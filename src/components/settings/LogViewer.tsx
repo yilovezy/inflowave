@@ -428,7 +428,7 @@ const LogViewer: React.FC = () => {
       </div>
 
       {/* 日志列表 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         <div ref={scrollRef} className="h-full overflow-y-auto p-4 space-y-2 font-mono text-sm bg-background">
           {logs.length === 0 ? (
             <div className="text-center text-muted-foreground py-8">

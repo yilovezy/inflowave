@@ -850,7 +850,7 @@ const ConnectionManager: React.FC<ConnectionManagerProps> = ({
       </div>
 
       {/* 连接表格 */}
-      <div className='flex-1 overflow-hidden px-6 py-6'>
+      <div className='flex-1 min-h-0 min-w-0 overflow-hidden px-6 py-6'>
         <div className='h-full rounded-lg border overflow-hidden bg-background'>
           <GlideDataTable
             columns={columns}

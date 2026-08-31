@@ -127,7 +127,7 @@ const RightFunctionPanel: React.FC<RightFunctionPanelProps> = ({
       </div>
 
       {/* 面板内容 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         <Suspense
           fallback={
             <div className="flex items-center justify-center h-full">

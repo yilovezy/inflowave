@@ -98,11 +98,13 @@ dist
 
 # Gatsby files
 .cache/
-# public 目录 - 但保留字体文件
+# public 目录 - 但保留字体文件和兼容脚本
 public/*
 !public/fonts/
 !public/locales
 !public/.gitkeep
+!public/safari13-compat.js
+!public/flex-gap-polyfill.js
 
 # 文档复制缓存
 public/user-docs/.copy-cache.json
@@ -136,3 +138,8 @@ pnpm-lock.yaml
 CLAUDE.md
 nul
 test_files/
+debug-layout.js
+*.png
+!public/**/*.png
+!src/**/*.png
+!src-tauri/**/*.png

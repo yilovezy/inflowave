@@ -33,6 +33,8 @@ import { useMenuTranslation } from '@/hooks/useTranslation';
 
 
 
+import { triggerNativeWindowResize } from '@/utils/safariHack';
+
 export interface DataGripStyleLayoutProps {
     children?: React.ReactNode;
 }
@@ -48,9 +50,17 @@ const DataGripStyleLayout: React.FC<DataGripStyleLayoutProps> = ({
     // 添加组件挂载/卸载日志
     const componentIdRef = React.useRef(`DataGripLayout-${Math.random().toString(36).substr(2, 9)}`);
     React.useEffect(() => {
-        logger.info(`🏗️ [DataGripStyleLayout] 组件挂载 (ID: ${componentIdRef.current})`);
+        logger.debug(`[DataGripLayout] 组件挂载，ID: ${componentIdRef.current}`);
+        
+        // 🚀 终极 Safari 13 WebKit 布局 Hack (Tauri Native 方案)
+        // 既然 DOM 级别的 resize 欺骗无效，且用户手动拖拉边框（即触发原生窗口改变）有效，
+        // 说明这是 WKWebView 原生层的几何计算 Bug。
+        // 我们直接调用 Tauri API 改变原生窗口大小 1 像素，强制 macOS 重新计算 WKWebView 布局！
+        setTimeout(() => triggerNativeWindowResize(), 100);
+        setTimeout(() => triggerNativeWindowResize(), 800);
+
         return () => {
-            logger.info(`🏗️ [DataGripStyleLayout] 组件卸载 (ID: ${componentIdRef.current})`);
+            logger.debug(`[DataGripLayout] 组件卸载，ID: ${componentIdRef.current}`);
         };
     }, []);
 
@@ -777,7 +787,7 @@ const DataGripStyleLayout: React.FC<DataGripStyleLayoutProps> = ({
         );
 
     return (
-        <Layout className='h-screen bg-background flex flex-col overflow-hidden'>
+        <Layout className='h-full w-full bg-background flex flex-col overflow-hidden'>
             {/* 主工具栏 - 统一背景，移除边框分割线 */}
             <Header className='h-10 px-2 bg-background flex items-center mt-2 flex-shrink-0'>
                 <MainToolbar

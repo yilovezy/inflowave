@@ -539,7 +539,7 @@ export const VerticalVisualization: React.FC<VerticalVisualizationProps> = ({
         </Dialog>
 
         {/* 图表列表 */}
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
           <ScrollArea className="h-full">
             <div className="p-3 space-y-3">
             {loading ? (

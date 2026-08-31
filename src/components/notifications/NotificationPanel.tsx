@@ -155,7 +155,7 @@ const NotificationPanel: React.FC<NotificationPanelProps> = ({
       </div>
 
       {/* 通知消息内容 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         {notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground dark:text-muted-foreground">
             <Bell className="w-12 h-12 mb-4 opacity-50 dark:opacity-40" />

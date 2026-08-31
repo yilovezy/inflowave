@@ -149,6 +149,7 @@ const UserGuideModal: React.FC<UserGuideModalProps> = ({isOpen, onClose}) => {
                     {showSidebar && (
                         <div
                             className='fixed inset-0 bg-black/50 z-5 md:hidden'
+                            style={{ top: 0, right: 0, bottom: 0, left: 0 }}
                             onClick={() => setShowSidebar(false)}
                         />
                     )}

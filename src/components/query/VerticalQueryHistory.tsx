@@ -416,7 +416,7 @@ export const VerticalQueryHistory: React.FC<VerticalQueryHistoryProps> = ({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="history" className="flex-1 mt-0 overflow-hidden">
+          <TabsContent value="history" className="flex-1 min-h-0 min-w-0 mt-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-3">
                 {loading ? (
@@ -437,7 +437,7 @@ export const VerticalQueryHistory: React.FC<VerticalQueryHistoryProps> = ({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="saved" className="flex-1 mt-0 overflow-hidden">
+          <TabsContent value="saved" className="flex-1 min-h-0 min-w-0 mt-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-3">
                 {loading ? (

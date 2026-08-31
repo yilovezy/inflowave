@@ -898,7 +898,7 @@ const SampleQueriesModal: React.FC<SampleQueriesModalProps> = ({ visible, onClos
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
           <Tabs defaultValue="v1" className="h-full flex flex-col">
             <div className="px-6 py-3 border-b flex-shrink-0">
               <TabsList className="grid w-full grid-cols-3">
@@ -917,7 +917,7 @@ const SampleQueriesModal: React.FC<SampleQueriesModalProps> = ({ visible, onClos
               </TabsList>
             </div>
 
-            <TabsContent value="v1" className="flex-1 m-0 overflow-hidden">
+            <TabsContent value="v1" className="flex-1 min-h-0 min-w-0 m-0 overflow-hidden">
               <ScrollArea className="h-full px-6 py-4">
                 <div className="space-y-6">
                   <div className="bg-blue-50 dark:bg-blue-950/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
@@ -932,7 +932,7 @@ const SampleQueriesModal: React.FC<SampleQueriesModalProps> = ({ visible, onClos
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="v2" className="flex-1 m-0 overflow-hidden">
+            <TabsContent value="v2" className="flex-1 min-h-0 min-w-0 m-0 overflow-hidden">
               <ScrollArea className="h-full px-6 py-4">
                 <div className="space-y-6">
                   <div className="bg-purple-50 dark:bg-purple-950/20 p-4 rounded-lg border border-purple-200 dark:border-purple-800">
@@ -947,7 +947,7 @@ const SampleQueriesModal: React.FC<SampleQueriesModalProps> = ({ visible, onClos
               </ScrollArea>
             </TabsContent>
 
-            <TabsContent value="v3" className="flex-1 m-0 overflow-hidden">
+            <TabsContent value="v3" className="flex-1 min-h-0 min-w-0 m-0 overflow-hidden">
               <ScrollArea className="h-full px-6 py-4">
                 <div className="space-y-6">
                   <div className="bg-green-50 dark:bg-green-950/20 p-4 rounded-lg border border-green-200 dark:border-green-800">

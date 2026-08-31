@@ -277,7 +277,7 @@ export const InteractiveChart: React.FC<InteractiveChartProps> = ({
       <Card
         className={`transition-all duration-300 ${isFullscreen ? 'fixed inset-0 z-50 m-0' : ''} ${className}`}
         style={{
-          height: isFullscreen ? '100vh' : height,
+          height: isFullscreen ? '100%' : height,
         }}
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">

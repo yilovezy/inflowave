@@ -225,7 +225,7 @@ class ErrorBoundary extends Component<Props, State> {
       const { error, errorInfo, errorId } = this.state;
 
       return (
-        <div className='h-screen flex items-center justify-center p-4 bg-muted/50'>
+        <div className='h-full flex items-center justify-center p-4 bg-muted/50'>
           <div className='max-w-4xl w-full max-h-[90vh] flex flex-col'>
             <div className='p-6 flex-shrink-0'>
               {/* 主要错误信息 */}

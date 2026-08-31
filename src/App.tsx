@@ -178,7 +178,7 @@ const MainLayout: React.FC = () => {
   // 🔧 如果解析detached tab失败，显示错误信息
   if (detachedTabError) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
+      <div className="h-full flex items-center justify-center bg-background">
         <div className="text-center p-8">
           <h1 className="text-2xl font-bold text-destructive mb-4">无法加载独立窗口</h1>
           <p className="text-muted-foreground mb-4">{detachedTabError}</p>
@@ -220,7 +220,7 @@ const MainLayout: React.FC = () => {
         {/* 全局菜单处理器 - 确保特殊页面也能处理菜单事件 */}
         <NativeMenuHandler onGlobalSearch={() => setGlobalSearchVisible(true)} />
         
-        <Layout className='min-h-screen bg-background'>
+        <Layout className='h-full bg-background'>
           {/* 应用工具栏 */}
 
           {/* 主内容区 */}
@@ -274,7 +274,6 @@ const MainLayout: React.FC = () => {
 };
 
 const App: React.FC = () => {
-  const [loading, setLoading] = useState(true);
   const [showUnsavedTabsDialog, setShowUnsavedTabsDialog] = useState(false);
   const [unsavedTabs, setUnsavedTabs] = useState<EditorTab[]>([]);
   const { preferences, loadUserPreferences } = useUserPreferencesStore();
@@ -472,7 +471,6 @@ const App: React.FC = () => {
       // 🛡️ 双重检查
       if (initializationCompleted.current) {
         logger.debug('[App] 初始化已完成，跳过');
-        setLoading(false);
         return;
       }
 
@@ -538,7 +536,6 @@ const App: React.FC = () => {
       } finally {
         // 标记初始化完成
         initializationCompleted.current = true;
-        setLoading(false);
 
         // 确保窗口标题正确设置
         document.title = 'InfloWave';
@@ -572,13 +569,10 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 🚀 优化：不再显示 React 层面的加载界面
-  // 依赖 index.html 的加载屏幕，避免两个加载界面重叠
-  // app-ready 事件会通知 index.html 隐藏加载屏幕
-  if (loading) {
-    // 返回空容器，让 index.html 的加载屏幕继续显示
-    return <div className='min-h-screen bg-background' />;
-  }
+  // 初始化只影响后台服务，不能阻止工作区挂载。
+  // 否则 index.html 的启动遮罩已隐藏、但此处仍返回空容器时，用户会看到白屏，
+  // 并且工具栏、数据源面板及其“新建连接”等事件监听器都尚未注册。
+  // 让工作区立即可用；各服务完成初始化后会自行更新对应状态。
 
   // 获取通知位置设置，如果没有设置则使用默认值
   const getToasterPosition = () => {

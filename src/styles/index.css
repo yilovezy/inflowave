@@ -16,6 +16,8 @@
 @import './modal-optimization.css';
 /* macOS 优化样式 */
 @import './macos-optimizations.css';
+/* Safari 13 CSS fallbacks (inset, etc.) */
+@import './safari13-compat.css';
 /* 字体偏好设置样式 */
 @import './font-preferences.css';
 /* 鼠标指针修复样式 */
@@ -403,8 +405,8 @@ body {
 }
 
 #root {
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  width: 100%;
 }
 
 /* 代码字体 */
@@ -892,7 +894,7 @@ pre,
 
 /* 桌面应用布局样式 */
 .desktop-layout {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1092,7 +1094,7 @@ pre,
 
 /* 兼容旧样式 */
 .app-layout {
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -1115,7 +1117,7 @@ pre,
   padding: 16px;
   background: #f5f5f5;
   overflow: auto;
-  height: calc(100vh - 64px);
+  height: calc(100% - 64px);
 }
 
 .app-footer {

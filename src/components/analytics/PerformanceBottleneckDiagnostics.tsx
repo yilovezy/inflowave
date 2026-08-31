@@ -1987,7 +1987,7 @@ export const PerformanceBottleneckDiagnostics: React.FC<
             </div>
           </div>
         </CardHeader>
-        <CardContent className='flex-1 overflow-hidden flex flex-col'>
+        <CardContent className='flex-1 min-h-0 min-w-0 overflow-hidden flex flex-col'>
           {loading ? (
             <div className='flex items-center justify-center py-8'>
               <Skeleton className='h-8 w-8 rounded-full animate-spin' />

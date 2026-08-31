@@ -2,6 +2,109 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!-- Safari 13 (macOS 10.15 Catalina) polyfills -->
+    <script>
+      if (typeof globalThis === 'undefined') window.globalThis = window;
+      if (!Object.hasOwn) Object.hasOwn = function(o,p){return Object.prototype.hasOwnProperty.call(o,p)};
+      if (!window.crypto) window.crypto = {};
+      if (!window.crypto.randomUUID) window.crypto.randomUUID=function(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)})};
+      if (typeof window.structuredClone==='undefined') window.structuredClone=function(o){return JSON.parse(JSON.stringify(o))};
+      if (!Array.prototype.at) Array.prototype.at=function(n){n=Math.trunc(n)||0;if(n<0)n+=this.length;return n<0||n>=this.length?undefined:this[n]};
+      if (!String.prototype.replaceAll) String.prototype.replaceAll=function(s,r){return this.replace(new RegExp(s,'g'),r)};
+      if (typeof window.ResizeObserver==='undefined'){var RO=function(cb){this.cb=cb};RO.prototype.observe=function(t){try{this.cb([{target:t,contentRect:t.getBoundingClientRect()}],this)}catch(e){}};RO.prototype.unobserve=function(){};RO.prototype.disconnect=function(){};window.ResizeObserver=RO}
+      if (typeof window.requestIdleCallback!=='function'){window.requestIdleCallback=function(cb,o){return setTimeout(function(){cb({didTimeout:false,timeRemaining:function(){return 50}})},o&&o.timeout?o.timeout:1)};window.cancelIdleCallback=function(id){clearTimeout(id)}}
+      // PointerCapture API Polyfill (Safari 13 不支持，Radix UI 等组件依赖)
+      if (typeof Element !== 'undefined') {
+        if (typeof Element.prototype.setPointerCapture === 'undefined') {
+          Element.prototype.setPointerCapture = function(id) { this._capturedPointerId = id; };
+        }
+        if (typeof Element.prototype.releasePointerCapture === 'undefined') {
+          Element.prototype.releasePointerCapture = function(id) { delete this._capturedPointerId; };
+        }
+        if (typeof Element.prototype.hasPointerCapture === 'undefined') {
+          Element.prototype.hasPointerCapture = function(id) { return this._capturedPointerId === id; };
+        }
+      }
+      // Pointer Events bridge (Safari 13 不支持，Radix UI 依赖)
+      //
+      // 仅提供 PointerEvent 构造器并不能修复交互：系统仍只会派发
+      // mousedown/mouseup，而 Radix 会监听 pointerdown/pointerup。这里把真实
+      // 鼠标事件转换为等价的 pointer 事件；这样不会影响已经原生支持
+      // Pointer Events 的浏览器。
+      if (typeof window.PointerEvent==='undefined'){
+        (function(){
+          function PointerEvent(type, params){
+            params=params||{};
+            var ev=new MouseEvent(type,params);
+            var pointerProperties={
+              pointerId:params.pointerId||1,
+              width:params.width||1,
+              height:params.height||1,
+              pressure:params.pressure||0,
+              tiltX:params.tiltX||0,
+              tiltY:params.tiltY||0,
+              pointerType:params.pointerType||'mouse',
+              isPrimary:params.isPrimary!==undefined?params.isPrimary:true
+            };
+            for(var key in pointerProperties){
+              try{Object.defineProperty(ev,key,{value:pointerProperties[key]});}catch(e){}
+            }
+            return ev;
+          }
+          PointerEvent.prototype=Object.create(MouseEvent.prototype);
+          PointerEvent.prototype.constructor=PointerEvent;
+          window.PointerEvent=PointerEvent;
+
+          function forwardMouseEvent(mouseEvent, pointerType){
+            // 不转发脚本自己派发的事件，避免意外的递归。
+            if(mouseEvent.__inflowavePointerBridge) return;
+            if(!mouseEvent.target || typeof mouseEvent.target.dispatchEvent !== 'function') return;
+            try {
+              var pointerEvent=new PointerEvent(pointerType,{
+                bubbles:true,
+                cancelable:true,
+                composed:true,
+                view:window,
+                detail:mouseEvent.detail,
+                screenX:mouseEvent.screenX,
+                screenY:mouseEvent.screenY,
+                clientX:mouseEvent.clientX,
+                clientY:mouseEvent.clientY,
+                ctrlKey:mouseEvent.ctrlKey,
+                altKey:mouseEvent.altKey,
+                shiftKey:mouseEvent.shiftKey,
+                metaKey:mouseEvent.metaKey,
+                button:mouseEvent.button,
+                buttons:mouseEvent.buttons,
+                relatedTarget:mouseEvent.relatedTarget,
+                pointerId:1,
+                pointerType:'mouse',
+                isPrimary:true,
+                pressure:mouseEvent.buttons ? 0.5 : 0
+              });
+              try{Object.defineProperty(pointerEvent,'__inflowavePointerBridge',{value:true});}catch(e){}
+              mouseEvent.target.dispatchEvent(pointerEvent);
+            } catch(e) {}
+          }
+
+          var mouseToPointer={
+            mousedown:'pointerdown', mouseup:'pointerup', mousemove:'pointermove',
+            mouseover:'pointerover', mouseout:'pointerout', mouseenter:'pointerenter', mouseleave:'pointerleave'
+          };
+          for(var mouseType in mouseToPointer){
+            (function(sourceType,targetType){
+              document.addEventListener(sourceType,function(event){
+                forwardMouseEvent(event,targetType);
+              },true);
+            })(mouseType,mouseToPointer[mouseType]);
+          }
+        })();
+      }
+    </script>
+    <!-- Safari 13 detection — adds 'safari13' class to <html> for CSS fallbacks -->
+    <script src="/safari13-compat.js"></script>
+    <!-- Flexbox gap polyfill — Safari 13 不支持 flex gap，此脚本自动将 gap 转为 margin -->
+    <script src="/flex-gap-polyfill.js"></script>
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>InfloWave</title>
@@ -35,17 +138,17 @@
         background-color: #ffffff;
         color: #1f2937;
         overflow: hidden;
-        height: 100vh;
-        width: 100vw;
+        height: 100%;
+        width: 100%;
         transition: background-color 0.2s ease, color 0.2s ease;
-        position: fixed;
-        top: 0;
-        left: 0;
+        /* 不固定 body：Catalina WebKit 会把 fixed body 当作独立视口，
+           使 React 挂载后的布局和启动遮罩相互覆盖。 */
+        position: relative;
       }
 
       #root {
-        height: 100vh;
-        width: 100vw;
+        height: 100%;
+        width: 100%;
         position: relative;
       }
 
@@ -55,11 +158,16 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        height: 100vh;
-        width: 100vw;
+        height: 100%;
+        width: 100%;
         background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
         position: fixed;
+        /* `inset` is unsupported by Catalina's Safari 13.  Keep explicit
+           offsets here because this element must never become a partial
+           invisible click shield during startup. */
         top: 0;
+        right: 0;
+        bottom: 0;
         left: 0;
         z-index: 9999;
       }
@@ -331,7 +439,10 @@
         updateLoadingText('ready');
 
         const loadingScreen = document.getElementById('loading-screen');
-        if (loadingScreen) {
+        if (loadingScreen && loadingScreen.style.display !== 'none') {
+          // 先放行输入，再执行淡出。旧版 WKWebView 的 opacity: 0 元素仍会命中测试，
+          // 否则动画的 400ms 内所有按钮都会像是“点不动”。
+          loadingScreen.style.pointerEvents = 'none';
           // 立即开始淡出动画
           loadingScreen.classList.add('fade-out');
           setTimeout(() => {
@@ -340,7 +451,7 @@
         }
 
         console.log('✅ Application ready');
-      });
+          });
 
       // ============================================================================
       // 错误处理
@@ -400,14 +511,17 @@
       // 监听错误事件
       window.addEventListener('error', function(event) {
         console.error('启动错误:', event.error);
-        let details = event.error ? (event.error.stack || event.error.toString()) : (event.message || "Unknown Error");
-        showStartupError(messages.startupError + "\n\nDetails:\n" + details);
+        let errorMsg = event.error ? (event.error.name + ': ' + event.error.message) : (event.message || "Unknown Error");
+        let stack = event.error && event.error.stack ? '\n' + event.error.stack : '';
+        showStartupError(messages.startupError + "\n\nDetails:\n" + errorMsg + stack);
       });
 
       window.addEventListener('unhandledrejection', function(event) {
         console.error('未处理的Promise拒绝:', event.reason);
-        let details = event.reason ? (event.reason.stack || event.reason.toString()) : "Unknown Promise rejection";
-        showStartupError(messages.initError + "\n\nDetails:\n" + details);
+        let reasonObj = event.reason || {};
+        let errorMsg = reasonObj.message ? (reasonObj.name + ': ' + reasonObj.message) : reasonObj.toString();
+        let stack = reasonObj.stack ? '\n' + reasonObj.stack : '';
+        showStartupError(messages.initError + "\n\nDetails:\n" + errorMsg + stack);
       });
 
       // ============================================================================

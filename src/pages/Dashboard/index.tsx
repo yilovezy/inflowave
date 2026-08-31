@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Row,
   Col,
@@ -39,6 +39,14 @@ const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [exportDialogVisible, setExportDialogVisible] = useState(false);
   const [currentDashboard, setCurrentDashboard] = useState<string | null>(null);
+
+  // 🚀 终极 Safari 13 WebKit 布局 Hack (Tauri Native 方案)
+  useEffect(() => {
+    import('@/utils/safariHack').then(({ triggerNativeWindowResize }) => {
+      setTimeout(() => triggerNativeWindowResize(), 100);
+      setTimeout(() => triggerNativeWindowResize(), 600);
+    });
+  }, []);
 
   // 统计数据
   const stats = {
@@ -112,7 +120,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* 内容区域 */}
-      <div className='flex-1 overflow-hidden bg-background'>
+      <div className='flex-1 min-h-0 overflow-y-auto bg-background'>
         <div className='p-6'>
       {/* 欢迎信息 */}
       <Alert className='mb-6'>

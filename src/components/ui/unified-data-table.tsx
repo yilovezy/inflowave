@@ -817,7 +817,7 @@ const CustomVirtualizedTable: React.FC<CustomVirtualizedTableProps> = ({
                     {/* 数据表头 - 支持水平滚动 */}
                     <div
                         ref={headerRef}
-                        className="flex-1 overflow-hidden relative"
+                        className="flex-1 min-h-0 min-w-0 overflow-hidden relative"
                     >
                         <div
                             className="header-scroll-container overflow-hidden"

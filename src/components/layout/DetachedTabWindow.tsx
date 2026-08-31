@@ -353,7 +353,7 @@ const DetachedTabWindow: React.FC<DetachedTabWindowProps> = ({
   // 🔧 如果是data-browser类型但缺少必要信息，显示错误
   if (tab.type === 'data-browser' && (!tab.connectionId || !tab.database || !tab.tableName)) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
+      <div className="h-full flex items-center justify-center bg-background">
         <div className="text-center p-8">
           <h1 className="text-2xl font-bold text-destructive mb-4">数据浏览器配置错误</h1>
           <p className="text-muted-foreground mb-2">缺少必要的连接信息</p>
@@ -371,7 +371,7 @@ const DetachedTabWindow: React.FC<DetachedTabWindowProps> = ({
 
   try {
     return (
-      <div className="h-screen bg-background flex flex-col">
+      <div className="h-full bg-background flex flex-col">
       {/* 顶部操作栏 */}
       <div className="flex-shrink-0 bg-muted/30 border-b px-4 py-2">
         <div className="flex items-center justify-between">
@@ -393,7 +393,7 @@ const DetachedTabWindow: React.FC<DetachedTabWindowProps> = ({
       </div>
 
       {/* 主要内容区域 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         {tab.type === 'data-browser' ? (
           <TableDataBrowser
             connectionId={tab.connectionId!}
@@ -435,7 +435,7 @@ const DetachedTabWindow: React.FC<DetachedTabWindowProps> = ({
                 )}
 
                 {/* 编辑器 */}
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
                   <EditorManager
                     ref={editorManagerRef}
                     currentTab={currentTab}
@@ -497,7 +497,7 @@ const DetachedTabWindow: React.FC<DetachedTabWindowProps> = ({
   } catch (error) {
     logger.error('❌ DetachedTabWindow 渲染错误:', error);
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
+      <div className="h-full flex items-center justify-center bg-background">
         <div className="text-center p-8">
           <h1 className="text-2xl font-bold text-destructive mb-4">独立窗口渲染错误</h1>
           <p className="text-muted-foreground mb-4">渲染组件时发生错误</p>

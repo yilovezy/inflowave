@@ -47,6 +47,18 @@
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "core:window:allow-set-theme",
+    "core:window:allow-theme",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-center",
+    "core:window:allow-inner-size",
+    "core:window:allow-outer-size",
+    "core:window:allow-inner-position",
+    "core:window:allow-outer-position",
+    "core:webview:allow-set-webview-size",
+    "core:webview:allow-set-webview-position",
+    "core:app:allow-set-app-theme"
   ]
 }

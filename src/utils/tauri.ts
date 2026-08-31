@@ -61,6 +61,7 @@ const VOID_COMMANDS = new Set([
   'delete_file',
   'close_app',
   'rebuild_native_menu',
+  'trigger_native_window_resize',
 
   // Settings
   'update_app_settings',

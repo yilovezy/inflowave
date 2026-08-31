@@ -196,8 +196,14 @@ export function ThemeProvider({
         }
       };
 
-      mediaQuery.addEventListener('change', handleChange);
-      return () => mediaQuery.removeEventListener('change', handleChange);
+      // Safari 13 (macOS 10.15) 兼容：MediaQueryList 没有 addEventListener
+      if (typeof mediaQuery.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', handleChange);
+        return () => mediaQuery.removeEventListener('change', handleChange);
+      } else {
+        (mediaQuery as any).addListener(handleChange);
+        return () => (mediaQuery as any).removeListener(handleChange);
+      }
     } else {
       // 确保theme不是空字符串
       if (theme && theme.trim() && (theme === 'light' || theme === 'dark')) {

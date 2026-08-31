@@ -1195,6 +1195,7 @@ async fn main() {
             open_logs_dir,
             get_video_server_port,
             start_video_server,
+            trigger_native_window_resize,
             // Environment-aware file operations
             write_file_env,
             read_file_env,
@@ -1493,6 +1494,27 @@ async fn main() {
                 if let Err(e) = setup_responsive_window_size(&window) {
                     error!("设置响应式窗口大小失败: {}", e);
                 }
+
+                // 针对 macOS / WKWebView 初始化尺寸滞后的自动刷新
+                let window_clone = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    // 等待窗口完全挂载与首次绘制
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    if let Ok(size) = window_clone.inner_size() {
+                        let _ = window_clone.set_size(tauri::PhysicalSize::new(size.width, size.height + 1));
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        let _ = window_clone.set_size(tauri::PhysicalSize::new(size.width, size.height));
+                        info!("✅ 已在启动后自动完成原生 WKWebView 尺寸重绘 (200ms)");
+                    }
+                    // 二次确认，确保慢速机型/老系统也能正确重排
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    if let Ok(size) = window_clone.inner_size() {
+                        let _ = window_clone.set_size(tauri::PhysicalSize::new(size.width, size.height + 1));
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        let _ = window_clone.set_size(tauri::PhysicalSize::new(size.width, size.height));
+                        info!("✅ 已在启动后自动完成原生 WKWebView 尺寸重绘 (600ms)");
+                    }
+                });
 
                 // 窗口已通过配置设置为可见，无需手动显示
                 info!("窗口已通过配置设置为可见状态");

@@ -57,16 +57,22 @@ export default defineConfig({
             '@utils': resolve(__dirname, 'src/utils'),
             '@assets': resolve(__dirname, 'src/assets'),
             '@i18n': resolve(__dirname, 'src/i18n'),
+            // 使用 ES5 语法的 UMD 预混淆包。内部只有 var，彻底杜绝所有旧版 Safari let/const 产生的 TDZ 和作用域崩溃。
+            'echarts': 'echarts/dist/echarts.min.js',
         },
+    },
+
+    // Safari 13 dev 模式兼容
+    esbuild: {
+        target: 'safari13',
     },
 
     // 构建配置
     build: {
-        // Tauri v2 webviews (Webview2, Webkit2GTK, WKWebView) all support es2021 natively.
-        // Safari13 target can cause TDZ issues (Cannot access '$' before initialization) during esbuild minification.
-        target: 'es2021',
-        // don't minify for debug builds. Use terser instead of esbuild to fix echarts circular dependency TDZ error.
-        minify: process.env.TAURI_DEBUG === 'true' ? false : 'terser',
+        // Safari 13 (macOS 10.15 Catalina) 兼容：需要转译可选链、空值合并等 ES2020+ 语法
+        target: 'safari13',
+        // 已通过 Rollup generatedCode: 'es5' 解决顶层 const 冲突导致的 TDZ Bug，恢复正常压缩
+        minify: process.env.TAURI_DEBUG === 'true' ? false : 'esbuild',
         // produce sourcemaps for debug builds
         sourcemap: process.env.TAURI_DEBUG === 'true',
         // 优化构建性能
@@ -74,26 +80,8 @@ export default defineConfig({
         // 分包策略
         rollupOptions: {
             output: {
-                manualChunks(id: string) {
-                    // 自动将 node_modules 中的第三方库拆包
-                    if (id.includes('node_modules')) {
-                        if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) {
-                            return 'vendor';
-                        }
-                        if (id.includes('echarts')) {
-                            return 'charts';
-                        }
-                        if (id.includes('codemirror') || id.includes('@codemirror') || id.includes('@lezer')) {
-                            return 'editor';
-                        }
-                        if (id.includes('@tauri-apps')) {
-                            return 'tauri';
-                        }
-                        if (id.includes('i18next') || id.includes('react-i18next')) {
-                            return 'i18n';
-                        }
-                    }
-                },
+                generatedCode: 'es5', // 强制 Rollup 使用 var 而不是 const 生成 chunk 代码，彻底解决 Safari 13 顶层 const 冲突导致的 TDZ Bug
+                // 删除漏洞百出的 manualChunks，让 Rollup 的原生算法自动进行无环分包，彻底终结 chunk 间循环依赖导致的 React undefined 问题
                 // 优化输出文件名
                 chunkFileNames: 'assets/js/[name]-[hash].js',
                 entryFileNames: 'assets/js/[name]-[hash].js',
@@ -118,6 +106,9 @@ export default defineConfig({
 
     // 优化配置
     optimizeDeps: {
+        esbuildOptions: {
+            target: 'safari13',
+        },
         include: [
             'react',
             'react-dom',

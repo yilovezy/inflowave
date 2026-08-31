@@ -177,3 +177,7 @@ dead_code = "allow"
 unused_variables = "warn"
 unused_imports = "warn"
 non_snake_case = "warn"
+
+# 本地 Patch 修复 macOS 10.15 缺失 API 问题
+[patch.crates-io]
+wry = { path = "/Users/zhouyi/Documents/GitHub/wry" }

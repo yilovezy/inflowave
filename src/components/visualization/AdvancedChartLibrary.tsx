@@ -147,7 +147,7 @@ const AdvancedChartLibrary: React.FC<AdvancedChartLibraryProps> = ({
       );
     }
 
-    const chartHeight = fullscreen ? 'calc(100vh - 200px)' : height;
+    const chartHeight = fullscreen ? 'calc(100% - 200px)' : height;
 
     switch (config.type) {
       case 'line':

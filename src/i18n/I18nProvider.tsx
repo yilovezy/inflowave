@@ -58,7 +58,7 @@ class I18nErrorBoundary extends React.Component<
 
 // 默认错误回退组件
 const DefaultErrorFallback: React.FC<{ error: Error }> = ({ error }) => (
-  <div className="flex items-center justify-center min-h-screen bg-red-50">
+  <div className="flex items-center justify-center h-full w-full bg-red-50">
     <div className="text-center p-6 bg-white rounded-lg shadow-lg max-w-md">
       <div className="text-red-500 text-4xl mb-4">⚠️</div>
       <h2 className="text-xl font-semibold text-gray-800 mb-2">

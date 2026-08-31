@@ -32,6 +32,16 @@ const InnerApp: React.FC = () => {
   return <App />;
 };
 
+// 启动遮罩只应等待 React 成功挂载，不能等待后端配置或可选服务完成。
+// 否则旧版 WebKit 中任一异步初始化挂起时，整个界面会一直被 index.html 的遮罩覆盖。
+const StartupSignal: React.FC = () => {
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent('app-ready'));
+  }, []);
+
+  return null;
+};
+
 // 主应用组件
 const AppWrapper: React.FC = () => {
   return (
@@ -39,6 +49,7 @@ const AppWrapper: React.FC = () => {
       enableLanguageDetection={true}
       enablePersistence={true}
     >
+      <StartupSignal />
       <ThemeProvider defaultTheme='system' storageKey='inflowave-ui-theme'>
         <TooltipProvider>
           <BrowserRouter
@@ -57,6 +68,12 @@ const AppWrapper: React.FC = () => {
 
 // 渲染应用
 const root = ReactDOM.createRoot(document.getElementById('root')!);
+
+// 专门针对 macOS / WKWebView 初始化尺寸滞后导致上半部分白屏的自动修复
+import { triggerNativeWindowResize } from '@/utils/safariHack';
+setTimeout(() => triggerNativeWindowResize(), 150);
+setTimeout(() => triggerNativeWindowResize(), 500);
+
 
 // 🔧 统一禁用 StrictMode
 // 原因：

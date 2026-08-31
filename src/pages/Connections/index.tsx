@@ -184,7 +184,7 @@ const Connections: React.FC = () => {
       </div>
 
       {/* 主要内容区域 */}
-      <div className='flex-1 overflow-hidden bg-background flex gap-6 p-6'>
+      <div className='flex-1 min-h-0 min-w-0 overflow-hidden bg-background flex gap-6 p-6'>
         {/* 左侧：连接管理器 */}
         <div className='flex-1 min-w-0'>
           <ConnectionManager

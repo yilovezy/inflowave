@@ -16,7 +16,7 @@ const Layout = forwardRef<HTMLDivElement, LayoutProps>(
       <div
         ref={ref}
         className={cn(
-          'flex min-h-screen',
+          'flex h-full w-full',
           hasSider ? 'flex-row' : 'flex-col',
           className
         )}

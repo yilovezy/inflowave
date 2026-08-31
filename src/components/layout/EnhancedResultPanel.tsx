@@ -2335,7 +2335,7 @@ const EnhancedResultPanel: React.FC<EnhancedResultPanelProps> = ({
             <TabsContent
               key='write-combined'
               value='write-combined'
-              className='flex-1 overflow-hidden mt-0'
+              className='flex-1 min-h-0 min-w-0 overflow-hidden mt-0'
             >
               <ScrollArea className='h-full'>
                 <div className='p-4 space-y-4'>
@@ -2462,7 +2462,7 @@ const EnhancedResultPanel: React.FC<EnhancedResultPanelProps> = ({
             <TabsContent
               key={`data-${index}`}
               value={`data-${index}`}
-              className='flex-1 overflow-hidden mt-0'
+              className='flex-1 min-h-0 min-w-0 overflow-hidden mt-0'
             >
               {/* 根据SQL语句类型显示不同的内容 */}
               {statementCategory === 'query' && parsedResult ? (
@@ -3134,7 +3134,7 @@ const EnhancedResultPanel: React.FC<EnhancedResultPanelProps> = ({
         })}
 
         {/* 字段统计标签页 - 优化为显示所有查询的统计 */}
-        <TabsContent value='statistics' className='flex-1 overflow-hidden mt-0'>
+        <TabsContent value='statistics' className='flex-1 min-h-0 min-w-0 overflow-hidden mt-0'>
           {allFieldStatistics.length > 0 ? (
             <div className='h-full flex flex-col'>
               {/* 字段统计头部 */}
@@ -3315,7 +3315,7 @@ const EnhancedResultPanel: React.FC<EnhancedResultPanelProps> = ({
         </TabsContent>
 
         {/* 数据样本标签页 */}
-        <TabsContent value='preview' className='flex-1 overflow-hidden mt-0'>
+        <TabsContent value='preview' className='flex-1 min-h-0 min-w-0 overflow-hidden mt-0'>
           {parsedData ? (
             <div className='h-full flex flex-col'>
               {/* 数据样本头部 */}
@@ -3824,7 +3824,7 @@ const EnhancedResultPanel: React.FC<EnhancedResultPanelProps> = ({
         })}
 
         {/* 数据洞察标签页 - 优化为显示所有查询的洞察 */}
-        <TabsContent value='insights' className='flex-1 overflow-hidden mt-0'>
+        <TabsContent value='insights' className='flex-1 min-h-0 min-w-0 overflow-hidden mt-0'>
           {allDataInsights.length > 0 && allDataInsights.some(q => q.insights.length > 0) ? (
             <div className='h-full flex flex-col'>
               {/* 洞察头部 */}

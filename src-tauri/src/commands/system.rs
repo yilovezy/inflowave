@@ -1192,3 +1192,17 @@ pub async fn start_video_server() -> Result<u16, String> {
         format!("启动视频服务器失败: {}", e)
     })
 }
+
+/// 强制原生窗口重排与尺寸重绘（修复 macOS WKWebView 初始白屏/尺寸偏移）
+#[tauri::command]
+pub async fn trigger_native_window_resize(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(size) = window.inner_size() {
+            let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height + 1));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+            debug!("成功执行原生窗口重绘/尺寸刷新命令");
+        }
+    }
+    Ok(())
+}

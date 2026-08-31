@@ -4,6 +4,13 @@ import { X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
+// Safari 13 / Legacy WebKit 检测（不支持 CSS inset 属性或添加了 safari13 类名）
+const isSafari13 = typeof window !== 'undefined' && (
+  document.documentElement.classList.contains('safari13') ||
+  (typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && !CSS.supports('inset', '0px')) ||
+  (/Mac OS X 10_15|Version\/13\.\d/.test(navigator.userAgent) && !/Chrome|Chromium|Edg|Firefox/.test(navigator.userAgent))
+);
+
 const Dialog = DialogPrimitive.Root;
 
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -15,13 +22,20 @@ const DialogClose = DialogPrimitive.Close;
 const DialogOverlay = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Overlay>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
->(({ className, ...props }, ref) => (
+>(({ className, style, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
       'fixed inset-0 z-50 bg-black/50',
       className
     )}
+    style={{
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      ...style,
+    }}
     {...props}
   />
 ));
@@ -39,7 +53,10 @@ const DialogContent = React.forwardRef<
 >(({ className, children, style, disableOutsideClick, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ top: 0, right: 0, bottom: 0, left: 0 }}
+    >
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
@@ -51,7 +68,18 @@ const DialogContent = React.forwardRef<
           maxHeight: '90vh',
           ...style,
         }}
-        onPointerDownOutside={disableOutsideClick ? (e) => e.preventDefault() : undefined}
+        onPointerDownOutside={(e) => {
+          // Safari 13 或显式禁用时，阻止外部点击关闭
+          if (isSafari13 || disableOutsideClick) {
+            e.preventDefault();
+          }
+        }}
+        onInteractOutside={(e) => {
+          // Safari 13 额外阻止 interact outside 事件
+          if (isSafari13) {
+            e.preventDefault();
+          }
+        }}
         // 设置 aria-describedby={undefined} 来消除 Radix UI 的无障碍警告
         // 当需要描述时，使用 DialogDescription 组件会自动覆盖此设置
         aria-describedby={undefined}

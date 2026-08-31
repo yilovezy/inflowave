@@ -291,7 +291,7 @@ export const WorkspaceContent: React.FC<WorkspaceContentProps> = ({
       </div>
 
       {/* 标签页列表 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         {workspaceTabs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <FileText className="w-12 h-12 mb-4 opacity-50" />

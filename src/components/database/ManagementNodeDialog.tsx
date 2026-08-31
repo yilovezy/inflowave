@@ -271,7 +271,7 @@ export const ManagementNodeDialog: React.FC<ManagementNodeDialogProps> = ({
                     </SheetHeader>
                 </div>
 
-                <div className="flex-1 overflow-hidden px-6 pb-6 flex flex-col gap-4">
+                <div className="flex-1 min-h-0 min-w-0 overflow-hidden px-6 pb-6 flex flex-col gap-4">
                     {/* 工具栏 */}
                     <div className="flex items-center gap-2">
                         <div className="relative flex-1">
